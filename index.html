@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#221b46" />
+    <title>像素炮阵 · Pixel Cannon</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="game-shell" aria-label="像素炮阵游戏">
+      <section class="play-area">
+        <header class="hud">
+          <button id="soundButton" class="round-button" aria-label="切换音效">♪</button>
+          <div class="level-copy"><strong>关卡 01</strong></div>
+          <button id="restartButton" class="round-button" aria-label="重新开始">↻</button>
+        </header>
+
+        <div class="mission-card" aria-label="关卡进度">
+          <span>✦ 轰碎所有色块</span>
+          <div class="progress-wrap">
+            <span id="blockCount">0</span>
+            <div class="progress-track"><i id="progressBar"></i></div>
+          </div>
+        </div>
+
+        <canvas id="gameCanvas" aria-label="游戏战场"></canvas>
+
+        <button id="slotUnlockButton" class="slot-unlock" aria-label="观看视频解锁第五个炮位">
+          <span>▶</span>
+          <b>解锁</b>
+          <small>视频</small>
+        </button>
+
+        <div id="toast" class="toast" role="status"></div>
+
+        <div id="resultPanel" class="result-panel" hidden>
+          <div class="result-burst">✦</div>
+          <small id="resultEyebrow">任务完成</small>
+          <h1 id="resultTitle">清除成功！</h1>
+          <p id="resultText">所有色块都被轰成了彩色碎片</p>
+          <button id="resultButton">再来一局</button>
+        </div>
+      </section>
+
+      <section class="control-deck">
+        <div id="queue" class="queue" aria-label="待命炮列"></div>
+        <p class="tip"><i></i> 只能击中下方已暴露的同色方块</p>
+      </section>
+    </main>
+
+    <script src="./game.js"></script>
+  </body>
+</html>
