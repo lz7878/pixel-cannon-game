@@ -12,6 +12,7 @@
   const resultButton = document.querySelector('#resultButton');
   const restartButton = document.querySelector('#restartButton');
   const soundButton = document.querySelector('#soundButton');
+  const speedButton = document.querySelector('#speedButton');
   const slotUnlockButton = document.querySelector('#slotUnlockButton');
 
   const PALETTE = {
@@ -76,13 +77,13 @@
 
   const state = {
     width: 0, height: 0, dpr: 1,
-    blocks: [], slots: [null, null, null, null, null], lanes: [[], [], []],
+    blocks: [], slots: Array(6).fill(null), lanes: [[], [], []],
     projectiles: [], particles: [], shockwaves: [], stars: [],
     columnRevealAt: {},
     totalBlocks: 0, remaining: 0, running: true, win: false,
-    deadlockNotified: false, adLoading: false, unlockedSlots: 4,
-    muted: false, time: 0, last: 0, shake: 0,
-    grid: { x: 0, y: 0, cell: 0 }
+    deadlockNotified: false, adLoading: false, unlockedSlots: 6,
+    muted: false, speedMultiplier: 1, time: 0, last: 0, shake: 0,
+    grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
 
   let audioContext = null;
@@ -177,7 +178,7 @@
   function init() {
     state.blocks = makeBlocks();
     state.lanes = makeQueue(state.blocks);
-    state.slots = [null, null, null, null, null];
+    state.slots = Array(6).fill(null);
     state.projectiles = [];
     state.particles = [];
     state.shockwaves = [];
@@ -188,17 +189,16 @@
     state.win = false;
     state.deadlockNotified = false;
     state.adLoading = false;
-    state.unlockedSlots = 4;
+    state.unlockedSlots = 6;
     state.shake = 0;
     resultPanel.hidden = true;
-    slotUnlockButton.hidden = false;
+    slotUnlockButton.hidden = true;
     slotUnlockButton.classList.remove('loading');
     slotUnlockButton.querySelector('b').textContent = '解锁';
     slotUnlockButton.querySelector('small').textContent = '视频';
     renderQueue();
     updateProgress();
     resize();
-    toast('4 个机器人阵地已就绪，右侧可看视频解锁第 5 个');
   }
 
   function resize() {
@@ -210,14 +210,19 @@
     canvas.height = Math.round(rect.height * state.dpr);
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
 
-    const cell = Math.min((state.width - 18) / ART[0].length, (state.height * .64) / ART.length);
+    const artHeightRatio = state.height < 500 ? .48 : .53;
+    const cell = Math.min(
+      (state.width - 18) / ART[0].length,
+      (state.height * artHeightRatio) / ART.length
+    );
     state.grid = {
-      cell,
+      cellX: cell,
+      cellY: cell,
       x: (state.width - ART[0].length * cell) / 2,
-      y: Math.max(86, state.height * .145)
+      y: Math.max(64, state.height * .13)
     };
-    // 让 DOM 视频按钮与 Canvas 中第 5 个机器人阵地共享同一个中心点。
-    slotUnlockButton.style.left = `${slotX(4) - 29}px`;
+    // 保留旧版激励视频入口的定位能力，当前关卡默认开放全部阵地。
+    slotUnlockButton.style.left = `${slotX(5) - 29}px`;
     slotUnlockButton.style.top = `${slotY() - 31}px`;
     makeStars();
   }
@@ -233,6 +238,7 @@
 
   function renderQueue() {
     queueEl.innerHTML = '';
+    queueEl.style.setProperty('--lane-count', state.lanes.length);
     state.lanes.forEach((lane, laneIndex) => {
       const laneEl = document.createElement('div');
       laneEl.className = 'queue-lane';
@@ -281,7 +287,7 @@
 
   function getTarget(color, slotIndex) {
     const startCol = Math.max(0, Math.min(ART[0].length - 1,
-      Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cell)
+      Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cellX)
     ));
     const targets = findReachableTargets(state.blocks, startCol).filter(item =>
       item.block.color === color && (state.columnRevealAt[item.block.col] || 0) <= state.time
@@ -295,12 +301,12 @@
     })[0];
   }
 
-  function slotX(index) { return state.width * (.1 + index * .2); }
-  function slotY() { return state.height * .88; }
+  function slotX(index) { return state.width * ((index + .5) / state.slots.length); }
+  function slotY() { return state.height * (state.height < 500 ? .75 : .79); }
   function blockCenter(block) {
     return {
-      x: state.grid.x + (block.col + .5) * state.grid.cell,
-      y: state.grid.y + (block.row + .5) * state.grid.cell
+      x: state.grid.x + (block.col + .5) * state.grid.cellX,
+      y: state.grid.y + (block.row + .5) * state.grid.cellY
     };
   }
 
@@ -391,13 +397,13 @@
 
   function gridCellCenter(cell) {
     return {
-      x: state.grid.x + (cell.col + .5) * state.grid.cell,
-      y: state.grid.y + (cell.row + .5) * state.grid.cell
+      x: state.grid.x + (cell.col + .5) * state.grid.cellX,
+      y: state.grid.y + (cell.row + .5) * state.grid.cellY
     };
   }
 
   function advanceRobot(robot, dt) {
-    let distanceLeft = robot.speed * dt;
+    let distanceLeft = robot.speed * state.speedMultiplier * dt;
     robot.walk += dt * 12;
 
     while (distanceLeft > 0 && !robot.done) {
@@ -530,26 +536,7 @@
   }
 
   function drawBackdrop() {
-    state.stars.forEach(star => {
-      const alpha = .18 + (Math.sin(state.time * 1.7 + star.phase) + 1) * .12;
-      ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-      ctx.beginPath();
-      ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-      ctx.fill();
-    });
-
-    const baseY = state.grid.y + ART.length * state.grid.cell + 12;
-    ctx.strokeStyle = 'rgba(96,74,160,.2)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(30, baseY);
-    ctx.lineTo(state.width - 30, baseY);
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(65,49,125,.28)';
-    ctx.font = '800 10px ui-rounded, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('目标区', state.width / 2, baseY + 18);
+    // 参考布局使用纯灰紫背景，不绘制星点、分隔线或“目标区”文字。
   }
 
   function roundRect(x, y, w, h, r) {
@@ -559,37 +546,39 @@
   }
 
   function drawBlocks() {
-    const { x, y, cell } = state.grid;
+    const { x, y, cellX, cellY } = state.grid;
+    const cell = Math.min(cellX, cellY);
     state.blocks.filter(b => b.alive).forEach(block => {
-      const px = x + block.col * cell;
-      const py = y + block.row * cell;
+      const px = x + block.col * cellX;
+      const py = y + block.row * cellY;
       // 参考图中的积木几乎紧贴，只留一条很细的接缝。
-      const gap = Math.max(.3, cell * .022);
+      const gapX = Math.max(.3, cellX * .022);
+      const gapY = Math.max(.3, cellY * .022);
       const palette = PALETTE[block.color];
       const reservedPulse = block.reserved ? Math.sin(state.time * 18) * 1.2 : 0;
       ctx.save();
-      ctx.translate(px + cell / 2, py + cell / 2);
+      ctx.translate(px + cellX / 2, py + cellY / 2);
       ctx.scale(1 + reservedPulse / cell, 1 + reservedPulse / cell);
-      ctx.translate(-cell / 2, -cell / 2);
+      ctx.translate(-cellX / 2, -cellY / 2);
 
       ctx.shadowColor = 'rgba(40,27,82,.2)';
       ctx.shadowBlur = 2;
       ctx.shadowOffsetY = 1.5;
       ctx.fillStyle = palette.dark;
-      roundRect(gap, gap + 1, cell - gap * 2, cell - gap * 2, cell * .2);
+      roundRect(gapX, gapY + 1, cellX - gapX * 2, cellY - gapY * 2, cell * .2);
       ctx.fill();
       ctx.shadowColor = 'transparent';
 
-      const grad = ctx.createLinearGradient(0, 0, cell, cell);
+      const grad = ctx.createLinearGradient(0, 0, cellX, cellY);
       grad.addColorStop(0, palette.light);
       grad.addColorStop(.35, palette.fill);
       grad.addColorStop(1, palette.dark);
       ctx.fillStyle = grad;
-      roundRect(gap, gap, cell - gap * 2, cell - gap * 2 - 1, cell * .2);
+      roundRect(gapX, gapY, cellX - gapX * 2, cellY - gapY * 2 - 1, cell * .2);
       ctx.fill();
 
       ctx.fillStyle = 'rgba(255,255,255,.35)';
-      roundRect(gap + cell * .13, gap + cell * .1, cell * .42, cell * .12, 4);
+      roundRect(gapX + cellX * .13, gapY + cellY * .1, cellX * .42, cellY * .12, 4);
       ctx.fill();
       ctx.restore();
     });
@@ -598,34 +587,28 @@
   function drawSlots() {
     const y = slotY();
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(65,49,125,.34)';
-    ctx.font = '800 9px ui-rounded, sans-serif';
-    ctx.fillText(`机器人阵地 ${state.unlockedSlots}/5`, state.width / 2, y - 43);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < state.slots.length; i++) {
       const x = slotX(i);
       const cannon = state.slots[i];
       ctx.save();
       ctx.translate(x, y);
       if (i >= state.unlockedSlots) {
         ctx.fillStyle = 'rgba(66,54,97,.2)';
-        roundRect(-28, -28, 56, 54, 14);
+        roundRect(-29, -39, 58, 76, 14);
         ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,.52)';
         ctx.lineWidth = 2;
         ctx.setLineDash([5, 5]);
-        roundRect(-28, -28, 56, 54, 14);
+        roundRect(-29, -39, 58, 76, 14);
         ctx.stroke();
         ctx.setLineDash([]);
       } else if (!cannon) {
-        ctx.strokeStyle = 'rgba(86,65,150,.3)';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
-        roundRect(-28, -28, 56, 54, 14);
+        ctx.strokeStyle = 'rgba(255,255,255,.48)';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 7]);
+        roundRect(-29, -39, 58, 76, 14);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(86,65,150,.45)';
-        ctx.font = '900 18px sans-serif';
-        ctx.fillText('+', 0, 6);
       } else {
         drawCannon(cannon);
       }
@@ -806,6 +789,12 @@
   restartButton.addEventListener('click', init);
   resultButton.addEventListener('click', init);
   slotUnlockButton.addEventListener('click', requestAdUnlock);
+  speedButton.addEventListener('click', () => {
+    state.speedMultiplier = state.speedMultiplier === 1 ? 2 : 1;
+    speedButton.classList.toggle('active', state.speedMultiplier === 2);
+    speedButton.querySelector('b').textContent = state.speedMultiplier === 2 ? '速度×2' : '速度×1';
+    tone(state.speedMultiplier === 2 ? 620 : 360, .08, 'triangle', .035);
+  });
   soundButton.addEventListener('click', () => {
     state.muted = !state.muted;
     soundButton.textContent = state.muted ? '×' : '♪';
