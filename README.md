@@ -24,4 +24,24 @@ python3 -m http.server 5173
 
 然后访问 `http://localhost:5173`。
 
+## 从参考图生成关卡 ART
+
+把无 UI 的原始参考图保存到项目目录后运行：
+
+```bash
+python3 tools/image_to_art.py watermelon.png \
+  --preview watermelon-grid.png \
+  --output watermelon-art.txt
+```
+
+确认预览图中的 34 x 34 网格与积木中心对齐后，可以直接更新 `game.js`：
+
+```bash
+python3 tools/image_to_art.py watermelon.png \
+  --preview watermelon-grid.png \
+  --apply game.js
+```
+
+如果图片周围有 UI 或留白，可用 `--crop left,top,right,bottom` 裁剪；自动网格仍有偏差时，用 `--bounds left,top,right,bottom` 精确指定第一格左上角到最后一格右下角的范围。识别字符为 `K` 黑、`R` 红、`W` 白、`G` 浅绿、`D` 深绿、`.` 空白。
+
 当前版本是用于验证核心玩法的 Web 原型。视频按钮目前用 1.1 秒延时模拟完整播放回调；接入抖音小游戏时，在激励视频 `onClose({ isEnded: true })` 回调中调用 `unlockExtraSlot()`，并继续接入生命周期、存档与分享 API。

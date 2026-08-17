@@ -15,30 +15,68 @@
   const slotUnlockButton = document.querySelector('#slotUnlockButton');
 
   const PALETTE = {
+    R: { fill: '#ed2024', light: '#ff4646', dark: '#b81019' },
+    G: { fill: '#63d84b', light: '#8aec68', dark: '#35ad2c' },
+    D: { fill: '#079d18', light: '#24bb30', dark: '#05720f' },
     M: { fill: '#e94f76', light: '#ff7e99', dark: '#a72e59' },
     Y: { fill: '#ffb63d', light: '#ffd76b', dark: '#d47724' },
     C: { fill: '#42cbe9', light: '#7eeafa', dark: '#2386b0' },
     W: { fill: '#f8f5ff', light: '#ffffff', dark: '#c8c1e4' },
     B: { fill: '#7965e8', light: '#a795ff', dark: '#4d3da8' },
-    K: { fill: '#332c50', light: '#5e557c', dark: '#171329' }
+    K: { fill: '#292a31', light: '#41434d', dark: '#16171c' }
   };
 
   const ART = [
-    '....MMMM....',
-    '...MMYYMM...',
-    '..MYYYYYYM..',
-    '.MYYCCCCYYM.',
-    '.MYCWWWWCYM.',
-    'MMYCWBBWCYMM',
-    'MYCCWKKWCCYM',
-    'MYYYCCCCYYYM',
-    '.MMYYMMYYMM.',
-    '..MM....MM..'
+    '................KK................',
+    '...............KRWK...............',
+    '..............KRRRWK..............',
+    '.............KRRRRRWK.............',
+    '.............KRRKRRRK.............',
+    '............KRRRKRRRWK............',
+    '...........KRRRRRRRRRWK...........',
+    '..........KRRRKRRRKRRRWK..........',
+    '..........KRRRRRRRRRRRRK..........',
+    '.KKK.....KRRKRRRRRRRKRRWK.....KKK.',
+    'KRRRK....KRRKRRRKRRRKRRRK....KRRRK',
+    'KRRRK...KRRRRRRRKRRRRRRRWK...KRRRK',
+    'KRRRK...KRRRRRRRRRRRRRRRRK...KRRRK',
+    '.KKGGK.KRRRRRRRRRRRRRRRRRWK.KGGKK.',
+    '...KGGKKRRRRKRRRRRRRRKRRRRKKGGK...',
+    '....KGGKRRRKWKRRRRRRKWKRRRRGGK....',
+    '.....KKRRRRKKKRRRRRRKKKRRRRKK......',
+    '.....KRKRRRRRRRRKKRRRRRRRRKRK.....',
+    '....KRRRRRRRRRRRRRRRRRRRRRRRRK....',
+    '....KRRRRRRRRRRRRRRRRRRRRRRRRK....',
+    '...KGRRRRKRRRRRRRRRRRRRRKRRRRGK...',
+    '..KGGGRRRKRRRRKRRRRKRRRRKRRRGGGK..',
+    '..KDDGGGRRRRRRKRRRRKRRRRRRGGGDDK..',
+    '...KDDGGGGRRRRRRRRRRRRRRGGGGDDK...',
+    '....KDDDGGGGRRRRRRRRRRGGGGDDDK....',
+    '.....KKDDDDGGGGGGGGGGGGDDDDKK.....',
+    '.......KKDDDDDDDDDDDDDDDDKK.......',
+    '...........KGKKKKKKKKGK...........',
+    '...........KGK......KGK...........',
+    '..........KKGK......KGKK..........',
+    '.........KRRRRK....KRRRRK.........',
+    '........KRRRRRK....KRRRRRK........',
+    '........KWWWWWK....KWWWWWK........',
+    '.........KKKKK......KKKKK.........'
+  ];
+
+  const QUEUE_ART = [
+    'KKK',
+    'RRK',
+    'RRR',
+    'GDR',
+    'GKK',
+    'KKK',
+    'WGD',
+    'W..'
   ];
 
   const state = {
     width: 0, height: 0, dpr: 1,
-    blocks: [], slots: [null, null, null, null, null], lanes: [[], [], [], []],
+    blocks: [], slots: [null, null, null, null, null], lanes: [[], [], []],
     projectiles: [], particles: [], shockwaves: [], stars: [],
     columnRevealAt: {},
     totalBlocks: 0, remaining: 0, running: true, win: false,
@@ -112,33 +150,33 @@
     });
   }
 
-  function makeSolution(blocks) {
-    const copy = blocks.map(b => ({ ...b }));
-    const sequence = [];
-    let guard = 0;
-    while (copy.some(b => b.alive) && guard++ < 300) {
-      const frontier = findReachableTargets(copy);
-      const counts = frontier.reduce((map, item) => map.set(item.block.color, (map.get(item.block.color) || 0) + 1), new Map());
-      const color = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
-      let ammo = 0;
-      while (ammo < 12) {
-        const target = findReachableTargets(copy)
-          .filter(item => item.block.color === color)
-          .sort((a, b) => a.distance - b.distance || b.block.row - a.block.row)[0];
-        if (!target) break;
-        target.block.alive = false;
-        ammo++;
-      }
-      sequence.push({ color, ammo, id: `cannon-${sequence.length}` });
-    }
-    return sequence;
+  function makeQueue(blocks) {
+    const totals = blocks.reduce((counts, block) => {
+      counts[block.color] = (counts[block.color] || 0) + 1;
+      return counts;
+    }, {});
+    const occurrences = [...QUEUE_ART.join('')].reduce((counts, color) => {
+      if (color !== '.') counts[color] = (counts[color] || 0) + 1;
+      return counts;
+    }, {});
+    const used = {};
+    const lanes = Array.from({ length: 3 }, () => []);
+
+    QUEUE_ART.forEach((row, rowIndex) => [...row].forEach((color, laneIndex) => {
+      if (color === '.') return;
+      const indexForColor = used[color] || 0;
+      const baseAmmo = Math.floor(totals[color] / occurrences[color]);
+      const extraAmmo = totals[color] % occurrences[color];
+      const ammo = baseAmmo + (indexForColor < extraAmmo ? 1 : 0);
+      used[color] = indexForColor + 1;
+      lanes[laneIndex].push({ color, ammo, id: `cannon-${rowIndex}-${laneIndex}` });
+    }));
+    return lanes;
   }
 
   function init() {
     state.blocks = makeBlocks();
-    const solution = makeSolution(state.blocks);
-    state.lanes = [[], [], [], []];
-    solution.forEach((cannon, i) => state.lanes[i % 4].push(cannon));
+    state.lanes = makeQueue(state.blocks);
     state.slots = [null, null, null, null, null];
     state.projectiles = [];
     state.particles = [];
@@ -172,7 +210,7 @@
     canvas.height = Math.round(rect.height * state.dpr);
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
 
-    const cell = Math.min((state.width - 28) / ART[0].length, (state.height * .53) / ART.length);
+    const cell = Math.min((state.width - 18) / ART[0].length, (state.height * .64) / ART.length);
     state.grid = {
       cell,
       x: (state.width - ART[0].length * cell) / 2,
@@ -232,8 +270,8 @@
   }
 
   function nearestEmptySlot(laneIndex) {
-    // 4 路机器人队伍均匀分布在屏幕上，用水平距离匹配最近的空阵地。
-    const laneX = state.width * (.125 + laneIndex * .25);
+    // 机器人队列均匀分布在屏幕上，用水平距离匹配最近的空阵地。
+    const laneX = state.width * ((laneIndex + .5) / state.lanes.length);
     return state.slots
       .slice(0, state.unlockedSlots)
       .map((cannon, index) => ({ cannon, index, distance: Math.abs(slotX(index) - laneX) }))
@@ -331,7 +369,7 @@
     cannon.recoil = 1;
     state.projectiles.push({
       owner: cannon.id, color: cannon.color, start, end, path,
-      x: start.x, y: start.y, segment: 0, speed: 185,
+      x: start.x, y: start.y, segment: 0, speed: 360,
       walk: 0, direction: 1, done: false, target
     });
     tone(220 + index * 22, .055, 'triangle', .025);
@@ -525,7 +563,8 @@
     state.blocks.filter(b => b.alive).forEach(block => {
       const px = x + block.col * cell;
       const py = y + block.row * cell;
-      const gap = Math.max(1.5, cell * .08);
+      // 参考图中的积木几乎紧贴，只留一条很细的接缝。
+      const gap = Math.max(.3, cell * .022);
       const palette = PALETTE[block.color];
       const reservedPulse = block.reserved ? Math.sin(state.time * 18) * 1.2 : 0;
       ctx.save();
@@ -534,10 +573,10 @@
       ctx.translate(-cell / 2, -cell / 2);
 
       ctx.shadowColor = 'rgba(40,27,82,.2)';
-      ctx.shadowBlur = 4;
-      ctx.shadowOffsetY = 3;
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetY = 1.5;
       ctx.fillStyle = palette.dark;
-      roundRect(gap, gap + 2, cell - gap * 2, cell - gap * 2, cell * .22);
+      roundRect(gap, gap + 1, cell - gap * 2, cell - gap * 2, cell * .2);
       ctx.fill();
       ctx.shadowColor = 'transparent';
 
@@ -546,7 +585,7 @@
       grad.addColorStop(.35, palette.fill);
       grad.addColorStop(1, palette.dark);
       ctx.fillStyle = grad;
-      roundRect(gap, gap, cell - gap * 2, cell - gap * 2 - 2, cell * .22);
+      roundRect(gap, gap, cell - gap * 2, cell - gap * 2 - 1, cell * .2);
       ctx.fill();
 
       ctx.fillStyle = 'rgba(255,255,255,.35)';
