@@ -16,32 +16,54 @@
 
 ## 运行
 
-直接打开 `index.html`，或在目录中启动任意静态服务器：
+安装依赖并启动开发服务器：
 
 ```bash
-python3 -m http.server 5173
+pnpm install
+pnpm dev
 ```
 
-然后访问 `http://localhost:5173`。
+然后访问终端输出的本地地址（默认是 `http://localhost:5173`）。
 
-## 从参考图生成关卡 ART
-
-把无 UI 的原始参考图保存到项目目录后运行：
+生产构建：
 
 ```bash
-python3 tools/image_to_art.py watermelon.png \
-  --preview watermelon-grid.png \
-  --output watermelon-art.txt
+pnpm build
+pnpm preview
 ```
 
-确认预览图中的 34 x 34 网格与积木中心对齐后，可以直接更新 `game.js`：
+## 关卡结构
+
+每关都是一个独立目录，地图、取色结果和检查图不会再堆到项目根目录：
+
+```text
+levels/
+  index.js                 # 自动发现 level-编号 目录，并按需加载
+  level-001/index.js       # 地图 + 队列
+  level-002/
+    index.js               # 地图 + 队列
+    palette.json           # 从参考图采样出的专属调色板
+    art.txt                # 脚本生成的原始网格，便于审阅
+    preview.png            # 识别检查图
+```
+
+`levels/index.js` 使用按需加载：进入某一关才下载该关地图。新增 `levels/level-003/index.js` 后会被自动发现，无需修改游戏主逻辑或关卡索引，适合持续扩展到大量关卡。
+
+## 从参考图生成关卡
+
+先新建一个关卡目录和入口文件（可复制前一关的 `index.js`，只保留 `ART`、`QUEUE_ART` 与 `export default`），再运行：
 
 ```bash
-python3 tools/image_to_art.py watermelon.png \
-  --preview watermelon-grid.png \
-  --apply game.js
+python3 tools/image_to_art.py reference.png \
+  --preview levels/level-003/preview.png \
+  --output levels/level-003/art.txt \
+  --palette-output levels/level-003/palette.json \
+  --apply levels/level-003/index.js \
+  --variable ART
 ```
 
-如果图片周围有 UI 或留白，可用 `--crop left,top,right,bottom` 裁剪；自动网格仍有偏差时，用 `--bounds left,top,right,bottom` 精确指定第一格左上角到最后一格右下角的范围。识别字符为 `K` 黑、`R` 红、`W` 白、`G` 浅绿、`D` 深绿、`.` 空白。
+确认 `preview.png` 的网格与积木中心对齐后即可运行游戏。图片周围有 UI 或留白时，用 `--crop left,top,right,bottom` 裁剪；仍有偏差时用 `--bounds left,top,right,bottom` 指定网格外框。
+
+当前识别字符包括：`K` 黑、`R` 红、`W` 白、`G` 绿、`D` 深绿、`P/M` 两种粉、`C/B` 两种蓝、`Y` 黄、`O` 橙、`.` 空白。脚本会同时输出关卡的专属调色板，避免不同图片的相近颜色被游戏统一替换。
 
 当前版本是用于验证核心玩法的 Web 原型。视频按钮目前用 1.1 秒延时模拟完整播放回调；接入抖音小游戏时，在激励视频 `onClose({ isEnded: true })` 回调中调用 `unlockExtraSlot()`，并继续接入生命周期、存档与分享 API。

@@ -1,6 +1,23 @@
-(() => {
+import { Application, Container, Sprite, Texture } from 'pixi.js';
+import { START_LEVEL } from './game.config.js';
+import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/index.js';
+
+(async () => {
   const canvas = document.querySelector('#gameCanvas');
   const ctx = canvas.getContext('2d');
+  const pixiCanvas = document.querySelector('#pixiCanvas');
+  const pixiApp = new Application();
+  await pixiApp.init({
+    canvas: pixiCanvas,
+    backgroundAlpha: 0,
+    antialias: false,
+    autoDensity: true,
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+    roundPixels: true
+  });
+  const pixelLayer = pixiApp.stage.addChild(new Container());
+  const pixelDisplays = new Map();
+  const tileTextures = new Map();
   const queueEl = document.querySelector('#queue');
   const slotCoresEl = document.querySelector('#slotCores');
   const blockCountEl = document.querySelector('#blockCount');
@@ -20,61 +37,17 @@
     R: { fill: '#ed2024', light: '#ff4646', dark: '#b81019' },
     G: { fill: '#63d84b', light: '#8aec68', dark: '#35ad2c' },
     D: { fill: '#079d18', light: '#24bb30', dark: '#05720f' },
-    M: { fill: '#e94f76', light: '#ff7e99', dark: '#a72e59' },
-    Y: { fill: '#ffb63d', light: '#ffd76b', dark: '#d47724' },
-    C: { fill: '#42cbe9', light: '#7eeafa', dark: '#2386b0' },
+    M: { fill: '#ee48bc', light: '#ff94e5', dark: '#b52b88' },
+    P: { fill: '#fe7eff', light: '#ffc0ff', dark: '#bd52bd' },
+    Y: { fill: '#ffd83d', light: '#ffed82', dark: '#cf9d1d' },
+    C: { fill: '#28dcea', light: '#76f5f1', dark: '#159ab6' },
+    O: { fill: '#f18a27', light: '#ffb34b', dark: '#ad5a16' },
     W: { fill: '#f8f5ff', light: '#ffffff', dark: '#c8c1e4' },
     B: { fill: '#7965e8', light: '#a795ff', dark: '#4d3da8' },
     K: { fill: '#292a31', light: '#41434d', dark: '#16171c' }
   };
-
-  const ART = [
-    '................KK................',
-    '...............KRWK...............',
-    '..............KRRRWK..............',
-    '.............KRRRRRWK.............',
-    '.............KRRKRRRK.............',
-    '............KRRRKRRRWK............',
-    '...........KRRRRRRRRRWK...........',
-    '..........KRRRKRRRKRRRWK..........',
-    '..........KRRRRRRRRRRRRK..........',
-    '.KKK.....KRRKRRRRRRRKRRWK.....KKK.',
-    'KRRRK....KRRKRRRKRRRKRRRK....KRRRK',
-    'KRRRK...KRRRRRRRKRRRRRRRWK...KRRRK',
-    'KRRRK...KRRRRRRRRRRRRRRRRK...KRRRK',
-    '.KKGGK.KRRRRRRRRRRRRRRRRRWK.KGGKK.',
-    '...KGGKKRRRRKRRRRRRRRKRRRRKKGGK...',
-    '....KGGKRRRKWKRRRRRRKWKRRRRGGK....',
-    '.....KKRRRRKKKRRRRRRKKKRRRRKK......',
-    '.....KRKRRRRRRRRKKRRRRRRRRKRK.....',
-    '....KRRRRRRRRRRRRRRRRRRRRRRRRK....',
-    '....KRRRRRRRRRRRRRRRRRRRRRRRRK....',
-    '...KGRRRRKRRRRRRRRRRRRRRKRRRRGK...',
-    '..KGGGRRRKRRRRKRRRRKRRRRKRRRGGGK..',
-    '..KDDGGGRRRRRRKRRRRKRRRRRRGGGDDK..',
-    '...KDDGGGGRRRRRRRRRRRRRRGGGGDDK...',
-    '....KDDDGGGGRRRRRRRRRRGGGGDDDK....',
-    '.....KKDDDDGGGGGGGGGGGGDDDDKK.....',
-    '.......KKDDDDDDDDDDDDDDDDKK.......',
-    '...........KGKKKKKKKKGK...........',
-    '...........KGK......KGK...........',
-    '..........KKGK......KGKK..........',
-    '.........KRRRRK....KRRRRK.........',
-    '........KRRRRRK....KRRRRRK........',
-    '........KWWWWWK....KWWWWWK........',
-    '.........KKKKK......KKKKK.........'
-  ];
-
-  const QUEUE_ART = [
-    'KKK',
-    'RRK',
-    'RRR',
-    'GDR',
-    'GKK',
-    'KKK',
-    'WGD',
-    'W..'
-  ];
+  const MAX_ACTIVE_ABSORPTIONS = 30;
+  const BLOCKED_LAUNCH_DELAY = .2;
 
   const state = {
     width: 0, height: 0, dpr: 1,
@@ -84,15 +57,21 @@
     totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
     deadlockNotified: false, adLoading: false, unlockedSlots: 6,
     muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0,
+    levelId: getLevelId(START_LEVEL), level: null, loadingLevel: false, loadRequest: 0,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
 
   let audioContext = null;
   let toastTimer = null;
 
+  function currentLevel() { return state.level; }
+  function currentArt() { return currentLevel().art; }
+  function paletteFor(color) { return currentLevel().palette?.[color] || PALETTE[color]; }
+  function currentPalette() { return { ...PALETTE, ...currentLevel().palette }; }
+
   function makeBlocks() {
     const blocks = [];
-    ART.forEach((row, r) => [...row].forEach((color, c) => {
+    currentArt().forEach((row, r) => [...row].forEach((color, c) => {
       if (color !== '.') blocks.push({ id: `${r}-${c}`, row: r, col: c, color, alive: true, reserved: false, pop: 0 });
     }));
     return blocks;
@@ -105,9 +84,9 @@
 
   function cellKey(row, col) { return `${row},${col}`; }
 
-  function findReachableTargets(blocks, startCol = Math.floor(ART[0].length / 2)) {
-    const rows = ART.length;
-    const cols = ART[0].length;
+  function findReachableTargets(blocks, startCol = Math.floor(currentArt()[0].length / 2)) {
+    const rows = currentArt().length;
+    const cols = currentArt()[0].length;
     const alive = blocks.filter(block => block.alive);
     const occupied = new Set(alive.map(block => cellKey(block.row, block.col)));
     const start = { row: rows, col: Math.max(-1, Math.min(cols, startCol)) };
@@ -157,14 +136,15 @@
       counts[block.color] = (counts[block.color] || 0) + 1;
       return counts;
     }, {});
-    const occurrences = [...QUEUE_ART.join('')].reduce((counts, color) => {
+    const queueArt = currentLevel().queueArt;
+    const occurrences = [...queueArt.join('')].reduce((counts, color) => {
       if (color !== '.') counts[color] = (counts[color] || 0) + 1;
       return counts;
     }, {});
     const used = {};
     const lanes = Array.from({ length: 3 }, () => []);
 
-    QUEUE_ART.forEach((row, rowIndex) => [...row].forEach((color, laneIndex) => {
+    queueArt.forEach((row, rowIndex) => [...row].forEach((color, laneIndex) => {
       if (color === '.') return;
       const indexForColor = used[color] || 0;
       const baseAmmo = Math.floor(totals[color] / occurrences[color]);
@@ -176,7 +156,26 @@
     return lanes;
   }
 
-  function init() {
+  async function init(levelId = state.levelId) {
+    const request = ++state.loadRequest;
+    state.loadingLevel = true;
+    state.running = false;
+    resultPanel.hidden = true;
+    try {
+      const level = await loadLevel(levelId);
+      if (request !== state.loadRequest) return;
+      state.levelId = level.id;
+      state.level = level;
+      state.loadingLevel = false;
+      resetLevel();
+    } catch (error) {
+      state.loadingLevel = false;
+      console.error(error);
+      toast('关卡加载失败，请重试');
+    }
+  }
+
+  function resetLevel() {
     state.sessionId++;
     state.blocks = makeBlocks();
     state.lanes = makeQueue(state.blocks);
@@ -198,6 +197,7 @@
     slotUnlockButton.classList.remove('loading');
     slotUnlockButton.querySelector('b').textContent = '解锁';
     slotUnlockButton.querySelector('small').textContent = '视频';
+    document.querySelector('.level-copy strong').textContent = `关卡${getLevelNumber(state.levelId)}`;
     renderQueue();
     updateProgress();
     resize();
@@ -211,23 +211,94 @@
     canvas.width = Math.round(rect.width * state.dpr);
     canvas.height = Math.round(rect.height * state.dpr);
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    pixiApp.renderer.resolution = state.dpr;
+    pixiApp.renderer.resize(rect.width, rect.height);
 
     const artHeightRatio = state.height < 500 ? .48 : .53;
-    const cell = Math.min(
-      (state.width - 18) / ART[0].length,
-      (state.height * artHeightRatio) / ART.length
+    const pixelUnit = 1 / state.dpr;
+    const rawCell = Math.min(
+      (state.width - 18) / currentArt()[0].length,
+      (state.height * artHeightRatio) / currentArt().length
     );
+    const cell = Math.floor(rawCell / pixelUnit) * pixelUnit;
+    const snapToPixel = value => Math.round(value / pixelUnit) * pixelUnit;
     state.grid = {
       cellX: cell,
       cellY: cell,
-      x: (state.width - ART[0].length * cell) / 2,
-      y: Math.max(64, state.height * .13)
+      x: snapToPixel((state.width - currentArt()[0].length * cell) / 2),
+      y: snapToPixel(Math.max(64, state.height * .13))
     };
     // 保留旧版激励视频入口的定位能力，当前关卡默认开放全部阵地。
     slotUnlockButton.style.left = `${slotX(5) - 29}px`;
     slotUnlockButton.style.top = `${slotY() - 31}px`;
     speedButton.style.left = `${Math.max(0, slotX(0) - 29)}px`;
     makeStars();
+    rebuildPixelLayer();
+  }
+
+  function rebuildPixelLayer() {
+    pixelLayer.removeChildren().forEach(display => display.destroy());
+    pixelDisplays.clear();
+    tileTextures.forEach(texture => texture.destroy(true));
+    tileTextures.clear();
+    const { x, y, cellX, cellY } = state.grid;
+    Object.entries(currentPalette()).forEach(([color, palette]) => {
+      tileTextures.set(color, createTileTexture(palette, cellX, cellY));
+    });
+    state.blocks.filter(block => block.alive || block.launchPending).forEach(block => {
+      const px = x + block.col * cellX;
+      const py = y + block.row * cellY;
+      const display = new Sprite(tileTextures.get(block.color));
+      display.position.set(px, py);
+      display.width = cellX;
+      display.height = cellY;
+      display.visible = !block.reserved;
+      pixelLayer.addChild(display);
+      pixelDisplays.set(block.id, display);
+    });
+  }
+
+  function createTileTexture(palette, cellX, cellY) {
+    const resolution = state.dpr;
+    const width = Math.round(cellX * resolution);
+    const height = Math.round(cellY * resolution);
+    const tileCanvas = document.createElement('canvas');
+    tileCanvas.width = width;
+    tileCanvas.height = height;
+    const tileCtx = tileCanvas.getContext('2d');
+    const groove = 1;
+    const radius = Math.max(2, Math.round(Math.min(width, height) * .1));
+
+    // 深色底座连续铺满，相邻纹理拼接后形成同色凹槽，不会透出背景。
+    tileCtx.fillStyle = palette.dark;
+    tileCtx.fillRect(0, 0, width, height);
+
+    const faceX = groove;
+    const faceY = groove;
+    const faceWidth = width - groove * 2;
+    const faceHeight = height - groove * 2;
+    const faceGradient = tileCtx.createLinearGradient(0, faceY, 0, faceY + faceHeight);
+    faceGradient.addColorStop(0, palette.light);
+    faceGradient.addColorStop(.18, palette.fill);
+    faceGradient.addColorStop(.72, palette.fill);
+    faceGradient.addColorStop(1, palette.dark);
+    tileCtx.beginPath();
+    tileCtx.roundRect(faceX, faceY, faceWidth, faceHeight, radius);
+    tileCtx.fillStyle = faceGradient;
+    tileCtx.fill();
+
+    // 轻微左上高光与右下内阴影，接近参考图的软质像素块面。
+    tileCtx.beginPath();
+    tileCtx.roundRect(faceX + .5, faceY + .5, faceWidth - 1, faceHeight - 1, radius);
+    tileCtx.strokeStyle = 'rgba(255,255,255,.18)';
+    tileCtx.lineWidth = 1;
+    tileCtx.stroke();
+    tileCtx.fillStyle = 'rgba(255,255,255,.22)';
+    tileCtx.fillRect(faceX + radius, faceY + 1, Math.max(1, faceWidth * .28), 1);
+
+    const texture = Texture.from(tileCanvas);
+    texture.source.scaleMode = 'linear';
+    return texture;
   }
 
   function makeStars() {
@@ -247,24 +318,23 @@
       ])
     );
     queueEl.innerHTML = '';
-    queueEl.style.setProperty('--lane-count', state.lanes.length);
-    state.lanes.forEach((lane, laneIndex) => {
+    const activeLanes = state.lanes
+      .map((lane, laneIndex) => ({ lane, laneIndex }))
+      .filter(({ lane }) => lane.length);
+    queueEl.style.setProperty('--lane-count', Math.max(1, activeLanes.length));
+    activeLanes.forEach(({ lane, laneIndex }) => {
       const laneEl = document.createElement('div');
       laneEl.className = 'queue-lane';
-      if (!lane.length) {
-        laneEl.innerHTML = '<span class="lane-empty">已出发完毕</span>';
-      } else {
-        lane.slice(0, 2).forEach((cannon, actualIndex) => {
-          const button = document.createElement('button');
-          button.className = `cannon-card ${actualIndex === 1 ? 'next' : ''}`;
-          button.dataset.cannonId = cannon.id;
-          button.style.setProperty('--cannon', PALETTE[cannon.color].fill);
-          button.setAttribute('aria-label', `${cannon.ammo} 点${cannon.color}色共振能量`);
-          button.innerHTML = '<span class="core-orb"><i></i></span>' + `<b>${cannon.ammo}</b>`;
-          if (actualIndex === 0) button.addEventListener('click', () => deploy(laneIndex, button));
-          laneEl.appendChild(button);
-        });
-      }
+      lane.slice(0, 2).forEach((cannon, actualIndex) => {
+        const button = document.createElement('button');
+        button.className = `cannon-card ${actualIndex === 1 ? 'next' : ''}`;
+        button.dataset.cannonId = cannon.id;
+        button.style.setProperty('--cannon', paletteFor(cannon.color).fill);
+        button.setAttribute('aria-label', `${cannon.ammo} 点${cannon.color}色共振能量`);
+        button.innerHTML = '<span class="core-orb"><i></i></span>' + `<b>${cannon.ammo}</b>`;
+        if (actualIndex === 0) button.addEventListener('click', () => deploy(laneIndex, button));
+        laneEl.appendChild(button);
+      });
       queueEl.appendChild(laneEl);
     });
 
@@ -293,13 +363,13 @@
 
   function deploy(laneIndex, sourceButton) {
     if (!state.running || !state.lanes[laneIndex].length) return;
-    const slotIndex = nearestEmptySlot(laneIndex);
+    const sourceRect = sourceButton.getBoundingClientRect();
+    const slotIndex = nearestEmptySlot(sourceRect);
     if (slotIndex < 0) {
       toast('共振阵地已满！等待当前核心完成');
       tone(130, .08, 'square', .045);
       return;
     }
-    const sourceRect = sourceButton.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();
     const targetLeft = canvasRect.left + slotX(slotIndex) - 29;
     const targetTop = canvasRect.top + slotY() - 38;
@@ -339,15 +409,10 @@
     });
   }
 
-  function nearestEmptySlot(laneIndex) {
-    // 使用队列列在页面上的真实中心点；队列整体居中或列数变化时仍能
-    // 严格按照实际距离选择阵地，最近的被占用后再选择下一近的位置。
-    const laneEl = queueEl.children[laneIndex];
-    const laneRect = laneEl?.getBoundingClientRect();
+  function nearestEmptySlot(sourceRect) {
+    // 按被点击卡片的真实位置，匹配最近的空阵地；空列移除后仍然准确。
     const canvasRect = canvas.getBoundingClientRect();
-    const laneX = laneRect
-      ? laneRect.left + laneRect.width / 2 - canvasRect.left
-      : state.width * ((laneIndex + .5) / state.lanes.length);
+    const laneX = sourceRect.left + sourceRect.width / 2 - canvasRect.left;
     return state.slots
       .slice(0, state.unlockedSlots)
       .map((cannon, index) => ({ cannon, index, distance: Math.abs(slotX(index) - laneX) }))
@@ -356,7 +421,7 @@
   }
 
   function getTargets(color, slotIndex, limit = 1) {
-    const startCol = Math.max(0, Math.min(ART[0].length - 1,
+    const startCol = Math.max(0, Math.min(currentArt()[0].length - 1,
       Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cellX)
     ));
     const targets = findReachableTargets(state.blocks, startCol).filter(item =>
@@ -372,11 +437,12 @@
 
   function getTarget(color, slotIndex) { return getTargets(color, slotIndex, 1)[0] || null; }
 
-  function resonanceLevel(index, color) {
-    let level = 1;
-    if (state.slots[index - 1]?.color === color) level++;
-    if (state.slots[index + 1]?.color === color) level++;
-    return level;
+  function markAdjacentTargetsExposed(block) {
+    state.blocks.forEach(candidate => {
+      if (!candidate.alive) return;
+      const isAdjacent = Math.abs(candidate.row - block.row) + Math.abs(candidate.col - block.col) === 1;
+      if (isAdjacent) candidate.exposedAt = state.time;
+    });
   }
 
   function slotX(index) {
@@ -422,11 +488,14 @@
           return;
         }
 
-        const availableAmmo = cannon.ammo - ownedShotCount;
+        // 全场飞行像素达到上限时暂停吸附，避免多个阵地同时批量发射造成卡顿。
+        const availableAmmo = Math.max(0, Math.min(
+          cannon.ammo - ownedShotCount,
+          MAX_ACTIVE_ABSORPTIONS - state.projectiles.length
+        ));
         if (cannon.cooldown <= 0 && availableAmmo > 0) {
-          const level = resonanceLevel(index, cannon.color);
           const targets = getTargets(cannon.color, index, availableAmmo);
-          if (targets.length) resonate(cannon, index, targets, level);
+          if (targets.length) resonate(cannon, index, targets);
         }
       });
     }
@@ -445,13 +514,14 @@
     if (state.running && state.remaining > 0 && !state.projectiles.length) checkDeadlock();
   }
 
-  function resonate(cannon, index, selections, level) {
+  function resonate(cannon, index, selections) {
     const end = { x: slotX(index), y: slotY() - 6 };
-    cannon.cooldown = level > 1 ? .045 : .07;
+    cannon.cooldown = .07;
     cannon.flash = 1;
     cannon.recoil = 1;
     selections.forEach((selection, order) => {
       const target = selection.block;
+      const exposedAt = target.exposedAt;
       const start = blockCenter(target);
       const side = Math.sign(end.x - start.x) || (order % 2 ? 1 : -1);
       const control = {
@@ -459,22 +529,26 @@
         y: Math.min(start.y, end.y) - 24 - (order % 4) * 5
       };
       const distance = Math.hypot(end.x - start.x, end.y - start.y);
-      const duration = Math.max(.28, Math.min(.82, distance / 600));
-      // 像素一旦起飞就立即离开图案；到达核心时只结算核心数值。
+      const duration = Math.max(.8, Math.min(1.8, distance / 220));
+      // 起飞即让路；用很短的起飞错峰维持视觉上的先后顺序。
       target.alive = false;
       target.reserved = false;
+      target.launchPending = true;
       target.pop = 1;
+      markAdjacentTargetsExposed(target);
       state.remaining--;
       state.columnRevealAt[target.col] = state.time + .035;
       state.projectiles.push({
         owner: cannon.id, color: cannon.color, start, end, control,
         x: start.x, y: start.y, t: 0,
+        delay: state.time - (exposedAt ?? -Infinity) < .5 ? BLOCKED_LAUNCH_DELAY : 0,
+        started: false,
         duration,
         done: false, target
       });
     });
     updateProgress();
-    tone(360 + level * 95 + index * 12, .11, 'sine', .035);
+    tone(455 + index * 12, .11, 'sine', .035);
   }
 
   function curvePoint(projectile, t) {
@@ -487,6 +561,16 @@
   }
 
   function advanceEnergy(energy, dt) {
+    if (energy.delay > 0) {
+      energy.delay -= dt * state.speedMultiplier;
+      if (energy.delay > 0) return;
+    }
+    if (!energy.started) {
+      energy.started = true;
+      energy.target.launchPending = false;
+      const pixelDisplay = pixelDisplays.get(energy.target.id);
+      if (pixelDisplay) pixelDisplay.visible = false;
+    }
     energy.t += dt * state.speedMultiplier / energy.duration;
     if (energy.t < 0) return;
     const point = curvePoint(energy, energy.t);
@@ -566,6 +650,14 @@
     if (!state.running) return;
     state.running = false;
     state.win = win;
+    const nextLevelId = win && getNextLevelId(state.levelId);
+    if (nextLevelId) {
+      setTimeout(() => {
+        toast(`进入第${getLevelNumber(nextLevelId)}关`);
+        init(nextLevelId);
+      }, 620);
+      return;
+    }
     setTimeout(() => {
       resultEyebrow.textContent = win ? '任务完成' : '阵地堵塞';
       resultTitle.textContent = win ? '共振完成！' : '换个顺序试试';
@@ -586,7 +678,6 @@
     ctx.clearRect(0, 0, state.width, state.height);
     ctx.save();
     drawBackdrop();
-    drawBlocks();
     drawSlots();
     drawProjectiles();
     drawEffects();
@@ -612,7 +703,7 @@
       // 参考图中的积木几乎紧贴，只留一条很细的接缝。
       const gapX = Math.max(.3, cellX * .022);
       const gapY = Math.max(.3, cellY * .022);
-      const palette = PALETTE[block.color];
+      const palette = paletteFor(block.color);
       const reservedPulse = block.reserved ? Math.sin(state.time * 18) * 1.2 : 0;
       ctx.save();
       ctx.translate(px + cellX / 2, py + cellY / 2);
@@ -645,24 +736,6 @@
   function drawSlots() {
     const y = slotY();
     ctx.textAlign = 'center';
-    for (let i = 0; i < state.slots.length - 1; i++) {
-      const left = state.slots[i];
-      const right = state.slots[i + 1];
-      if (!left || !right || left.color !== right.color) continue;
-      const palette = PALETTE[left.color];
-      const pulse = .55 + Math.sin(state.time * 10 + i) * .22;
-      ctx.save();
-      ctx.globalAlpha = pulse;
-      ctx.strokeStyle = palette.light;
-      ctx.lineWidth = 3;
-      ctx.shadowColor = palette.fill;
-      ctx.shadowBlur = 12;
-      ctx.beginPath();
-      ctx.moveTo(slotX(i) + 20, y - 6);
-      ctx.bezierCurveTo(slotX(i) + 35, y - 19, slotX(i + 1) - 35, y + 7, slotX(i + 1) - 20, y - 6);
-      ctx.stroke();
-      ctx.restore();
-    }
     for (let i = 0; i < state.slots.length; i++) {
       const x = slotX(i);
       const cannon = state.slots[i];
@@ -692,6 +765,8 @@
 
   function syncSlotCores() {
     const activeIds = new Set();
+    const canvasRect = canvas.getBoundingClientRect();
+    const coreLayerRect = slotCoresEl.getBoundingClientRect();
     state.slots.forEach((cannon, index) => {
       if (!cannon) return;
       activeIds.add(cannon.id);
@@ -705,9 +780,10 @@
         core.innerHTML = '<span class="core-orb"><i></i></span><b></b>';
         slotCoresEl.appendChild(core);
       }
-      core.style.setProperty('--cannon', PALETTE[cannon.color].fill);
-      core.style.left = `${slotX(index) - 29}px`;
-      core.style.top = `${slotY() - 39}px`;
+      core.style.setProperty('--cannon', paletteFor(cannon.color).fill);
+      // 覆盖层与 Canvas 可能因布局、缩放或安全区产生偏移，使用实际页面坐标换算。
+      core.style.left = `${canvasRect.left - coreLayerRect.left + slotX(index) - 29}px`;
+      core.style.top = `${canvasRect.top - coreLayerRect.top + slotY() - 39}px`;
       const ammoEl = core.querySelector('b');
       const ammo = String(cannon.ammo);
       if (ammoEl.textContent !== ammo) ammoEl.textContent = ammo;
@@ -722,8 +798,8 @@
   }
 
   function drawEnergyStream(energy) {
-    if (energy.t < 0) return;
-    const palette = PALETTE[energy.color];
+    if (energy.delay > 0 || energy.t < 0) return;
+    const palette = paletteFor(energy.color);
     const head = curvePoint(energy, energy.t);
     const tail = curvePoint(energy, energy.t - .13);
     ctx.save();
@@ -757,7 +833,7 @@
       ctx.globalAlpha = Math.min(1, p.life * 2.3);
       ctx.translate(p.x, p.y);
       ctx.rotate(p.rotation);
-      ctx.fillStyle = PALETTE[p.color].fill;
+      ctx.fillStyle = paletteFor(p.color).fill;
       roundRect(-p.size / 2, -p.size / 2, p.size, p.size, 1.5);
       ctx.fill();
       ctx.restore();

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -18,6 +19,13 @@ PALETTE = {
     "W": [(246, 246, 243), (225, 225, 225)],
     "G": [(99, 215, 72), (72, 196, 55)],
     "D": [(4, 151, 18), (11, 125, 20)],
+    "P": [(254, 126, 255), (254, 112, 255), (240, 112, 240)],
+    "M": [(228, 66, 188), (240, 64, 176), (224, 64, 160)],
+    # 两种蓝色在原图中是不同的积木填充色，不能共用一个 C 类。
+    "C": [(48, 223, 252), (51, 221, 252)],
+    "B": [(78, 253, 246), (77, 252, 245)],
+    "Y": [(255, 227, 71), (244, 190, 33)],
+    "O": [(238, 133, 37), (255, 170, 60)],
 }
 
 PREVIEW_COLORS = {
@@ -26,6 +34,12 @@ PREVIEW_COLORS = {
     "W": "#ffffff",
     "G": "#63d84b",
     "D": "#079d18",
+    "M": "#e442bc",
+    "P": "#ff9cff",
+    "C": "#30dffc",
+    "B": "#4efdf6",
+    "Y": "#ffe347",
+    "O": "#ee8525",
     ".": "#9a92b8",
 }
 
@@ -50,8 +64,11 @@ def foreground_pixel(rgb: tuple[int, int, int]) -> bool:
     r, g, b = rgb
     red = r > 120 and r > g * 1.45 and r > b * 1.25
     green = g > 65 and g > r * 1.14 and g > b * 1.05
+    pink = r > 150 and b > 130 and g < r * .82
+    cyan = b > 150 and g > 130 and r < g * .7
+    yellow_or_orange = r > 150 and g > 80 and b < g * .65
     dark = max(rgb) < 92
-    return red or green or dark
+    return red or green or pink or cyan or yellow_or_orange or dark
 
 
 def auto_bounds(image: Image.Image, cols: int, rows: int) -> tuple[float, float, float, float]:
@@ -149,6 +166,45 @@ def recognize(
     return art, uncertain
 
 
+def blend(color: tuple[int, int, int], target: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    return tuple(round(value * (1 - amount) + target[index] * amount) for index, value in enumerate(color))
+
+
+def rgb_hex(color: tuple[int, int, int]) -> str:
+    return "#" + "".join(f"{channel:02x}" for channel in color)
+
+
+def derive_palette(
+    image: Image.Image,
+    bounds: tuple[float, float, float, float],
+    art: list[str],
+) -> dict[str, dict[str, str]]:
+    left, top, right, bottom = bounds
+    rows, cols = len(art), len(art[0])
+    pitch_x = (right - left) / cols
+    pitch_y = (bottom - top) / rows
+    samples: dict[str, list[tuple[int, int, int]]] = {symbol: [] for symbol in PALETTE}
+    for row, values in enumerate(art):
+        for col, symbol in enumerate(values):
+            if symbol == ".":
+                continue
+            x = left + (col + .5) * pitch_x
+            y = top + (row + .5) * pitch_y
+            samples[symbol].append(sample_cell(image, x, y, pitch_x, pitch_y))
+
+    palette = {}
+    for symbol, values in samples.items():
+        if not values:
+            continue
+        fill = tuple(int(median(channel)) for channel in zip(*values))
+        palette[symbol] = {
+            "fill": rgb_hex(fill),
+            "light": rgb_hex(blend(fill, (255, 255, 255), .24)),
+            "dark": rgb_hex(blend(fill, (0, 0, 0), .28)),
+        }
+    return palette
+
+
 def js_array(art: list[str], variable: str = "ART", indent: str = "  ") -> str:
     rows = ",\n".join(f"{indent}  '{row}'" for row in art)
     return f"{indent}const {variable} = [\n{rows}\n{indent}];"
@@ -197,6 +253,7 @@ def main() -> int:
     parser.add_argument("--bounds", type=parse_box, help="网格外框：left,top,right,bottom（相对裁剪后的图片）")
     parser.add_argument("--preview", type=Path, help="输出带识别网格的检查图")
     parser.add_argument("--output", type=Path, help="将 ART 写入文本文件；默认打印到终端")
+    parser.add_argument("--palette-output", type=Path, help="输出从图片采样得到的 JSON 调色板")
     parser.add_argument("--apply", type=Path, help="直接替换指定 JS 文件中的 ART")
     parser.add_argument("--variable", default="ART", help="JS 变量名，默认 ART")
     args = parser.parse_args()
@@ -223,8 +280,12 @@ def main() -> int:
     if args.preview:
         save_preview(image, args.preview, bounds, art)
         print(f"检查图：{args.preview}", file=sys.stderr)
+    if args.palette_output:
+        palette = derive_palette(image, bounds, art)
+        args.palette_output.write_text(json.dumps(palette, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"调色板：{args.palette_output}", file=sys.stderr)
 
-    counts = {symbol: sum(row.count(symbol) for row in art) for symbol in ".KRWGD"}
+    counts = {symbol: sum(row.count(symbol) for row in art) for symbol in "." + "".join(PALETTE)}
     print(f"网格：{args.cols}x{args.rows}，点位：{counts}，外框：{tuple(round(v, 1) for v in bounds)}", file=sys.stderr)
     if uncertain:
         examples = ", ".join(f"({r},{c})={rgb}" for r, c, _, rgb in uncertain[:8])
