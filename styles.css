@@ -215,11 +215,11 @@ button { font: inherit; touch-action: manipulation; }
   top: auto;
   width: 58px;
   height: 76px;
-  border: 0;
-  border-radius: 19px 19px 15px 15px;
+  border: 2px solid color-mix(in srgb, var(--cannon), white 42%);
+  border-radius: 18px;
   color: white;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--cannon), white 17%), var(--cannon));
-  box-shadow: inset 0 3px 2px rgba(255,255,255,.35), inset 0 -6px 0 rgba(41,20,70,.14), 0 5px 8px rgba(45,30,75,.2);
+  background: linear-gradient(155deg, #37394c, #202130);
+  box-shadow: inset 0 2px 1px rgba(255,255,255,.16), 0 5px 8px rgba(32,29,54,.28), 0 0 12px color-mix(in srgb, var(--cannon), transparent 55%);
   transition: transform .16s, opacity .16s;
   animation: queueIn .2s ease-out;
 }
@@ -227,48 +227,43 @@ button { font: inherit; touch-action: manipulation; }
 .cannon-card::before {
   content: "";
   position: absolute;
-  top: -8px;
-  left: 25px;
-  width: 8px;
-  height: 14px;
-  border-radius: 5px;
-  background: var(--cannon);
-  box-shadow: 0 -4px 0 1px color-mix(in srgb, var(--cannon), white 28%);
+  inset: 5px 8px 24px;
+  border: 1px solid color-mix(in srgb, var(--cannon), white 55%);
+  border-radius: 50%;
+  animation: coreSpin 2.4s linear infinite;
 }
 
 .cannon-card::after {
   content: "";
   position: absolute;
-  left: 8px;
-  bottom: -5px;
-  width: 15px;
-  height: 12px;
-  border-radius: 4px 4px 7px 7px;
-  background: color-mix(in srgb, var(--cannon), #342a50 35%);
-  box-shadow: 27px 0 color-mix(in srgb, var(--cannon), #342a50 35%);
-}
-
-.robot-face {
-  position: absolute;
-  top: 13px;
-  left: 10px;
-  width: 38px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border-radius: 9px;
-  background: #3d3656;
-  box-shadow: inset 0 3px 0 rgba(17,13,31,.25), 0 2px 0 rgba(255,255,255,.25);
-}
-
-.robot-face i {
-  width: 6px;
-  height: 6px;
+  left: 12px;
+  right: 12px;
+  bottom: -4px;
+  height: 7px;
   border-radius: 50%;
-  background: white;
-  box-shadow: 0 0 7px white;
+  background: rgba(28,24,48,.35);
+  filter: blur(2px);
+}
+
+.core-orb {
+  position: absolute;
+  top: 8px;
+  left: 11px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 28%, white 0 5%, color-mix(in srgb, var(--cannon), white 38%) 12%, var(--cannon) 52%, color-mix(in srgb, var(--cannon), black 42%) 100%);
+  box-shadow: 0 0 10px var(--cannon), inset 0 -4px 6px rgba(20,14,38,.38);
+}
+
+.core-orb i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.8);
+  box-shadow: 0 0 8px white;
 }
 
 .cannon-card b {
@@ -277,14 +272,14 @@ button { font: inherit; touch-action: manipulation; }
   display: inline-grid;
   place-items: center;
   min-width: 31px;
-  height: 27px;
-  margin-top: 38px;
+  height: 22px;
+  margin-top: 47px;
   padding: 0 5px;
-  border-radius: 10px;
+  border-radius: 8px;
   color: white;
-  background: #4a405f;
-  font-size: 17px;
-  box-shadow: inset 0 2px 0 rgba(255,255,255,.18), 0 3px 0 rgba(51,34,77,.24);
+  background: rgba(15,14,26,.62);
+  font-size: 15px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
 }
 
 .slot-unlock {
@@ -382,6 +377,7 @@ button { font: inherit; touch-action: manipulation; }
 @keyframes bob { to { transform: translateY(-8px) rotate(8deg); } }
 @keyframes unlockPulse { to { filter: brightness(1.35); transform: scale(.96); } }
 @keyframes queueIn { from { opacity: 0; transform: translateY(8px) scale(.94); } }
+@keyframes coreSpin { to { transform: rotate(360deg); } }
 
 @media (max-height: 700px) {
   .control-deck { padding-top: 10px; }
@@ -389,9 +385,6 @@ button { font: inherit; touch-action: manipulation; }
   .queue-lane { grid-template-rows: repeat(2, 76px); gap: 18px; }
   .queue-lane::after { top: 68px; }
   .cannon-card { width: 58px; height: 76px; transform-origin: center; }
-  .cannon-card::before { left: 25px; height: 12px; }
-  .cannon-card::after { left: 8px; width: 15px; box-shadow: 27px 0 color-mix(in srgb, var(--cannon), #342a50 35%); }
-  .robot-face { top: 10px; left: 10px; width: 38px; height: 18px; }
-  .cannon-card b { margin-top: 33px; height: 24px; }
+  .cannon-card b { margin-top: 47px; height: 22px; }
   .tip { display: none; }
 }

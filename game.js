@@ -80,9 +80,9 @@
     blocks: [], slots: Array(6).fill(null), lanes: [[], [], []],
     projectiles: [], particles: [], shockwaves: [], stars: [],
     columnRevealAt: {},
-    totalBlocks: 0, remaining: 0, running: true, win: false,
+    totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
     deadlockNotified: false, adLoading: false, unlockedSlots: 6,
-    muted: false, speedMultiplier: 1, time: 0, last: 0, shake: 0,
+    muted: false, speedMultiplier: 1, time: 0, last: 0,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
 
@@ -187,10 +187,10 @@
     state.remaining = state.totalBlocks;
     state.running = true;
     state.win = false;
+    state.finishing = false;
     state.deadlockNotified = false;
     state.adLoading = false;
     state.unlockedSlots = 6;
-    state.shake = 0;
     resultPanel.hidden = true;
     slotUnlockButton.hidden = true;
     slotUnlockButton.classList.remove('loading');
@@ -224,6 +224,7 @@
     // 保留旧版激励视频入口的定位能力，当前关卡默认开放全部阵地。
     slotUnlockButton.style.left = `${slotX(5) - 29}px`;
     slotUnlockButton.style.top = `${slotY() - 31}px`;
+    speedButton.style.left = `${Math.max(0, slotX(0) - 29)}px`;
     makeStars();
   }
 
@@ -249,8 +250,8 @@
           const button = document.createElement('button');
           button.className = `cannon-card ${actualIndex === 1 ? 'next' : ''}`;
           button.style.setProperty('--cannon', PALETTE[cannon.color].fill);
-          button.setAttribute('aria-label', `${cannon.ammo} 个${cannon.color}色爆破机器人`);
-          button.innerHTML = '<span class="robot-face"><i></i><i></i></span>' + `<b>${cannon.ammo}</b>`;
+          button.setAttribute('aria-label', `${cannon.ammo} 点${cannon.color}色共振能量`);
+          button.innerHTML = '<span class="core-orb"><i></i></span>' + `<b>${cannon.ammo}</b>`;
           if (actualIndex === 0) button.addEventListener('click', () => deploy(laneIndex));
           laneEl.appendChild(button);
         });
@@ -263,7 +264,7 @@
     if (!state.running || !state.lanes[laneIndex].length) return;
     const slotIndex = nearestEmptySlot(laneIndex);
     if (slotIndex < 0) {
-      toast('机器人阵地已满！等待当前任务完成');
+      toast('共振阵地已满！等待当前核心完成');
       tone(130, .08, 'square', .045);
       return;
     }
@@ -276,32 +277,56 @@
   }
 
   function nearestEmptySlot(laneIndex) {
-    // 机器人队列均匀分布在屏幕上，用水平距离匹配最近的空阵地。
-    const laneX = state.width * ((laneIndex + .5) / state.lanes.length);
+    // 使用队列列在页面上的真实中心点；队列整体居中或列数变化时仍能
+    // 严格按照实际距离选择阵地，最近的被占用后再选择下一近的位置。
+    const laneEl = queueEl.children[laneIndex];
+    const laneRect = laneEl?.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const laneX = laneRect
+      ? laneRect.left + laneRect.width / 2 - canvasRect.left
+      : state.width * ((laneIndex + .5) / state.lanes.length);
     return state.slots
       .slice(0, state.unlockedSlots)
       .map((cannon, index) => ({ cannon, index, distance: Math.abs(slotX(index) - laneX) }))
       .filter(item => !item.cannon)
-      .sort((a, b) => a.distance - b.distance || Math.abs(slotX(a.index) - state.width / 2) - Math.abs(slotX(b.index) - state.width / 2))[0]?.index ?? -1;
+      .sort((a, b) => a.distance - b.distance || a.index - b.index)[0]?.index ?? -1;
   }
 
-  function getTarget(color, slotIndex) {
+  function getTargets(color, slotIndex, limit = 1) {
     const startCol = Math.max(0, Math.min(ART[0].length - 1,
       Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cellX)
     ));
     const targets = findReachableTargets(state.blocks, startCol).filter(item =>
       item.block.color === color && (state.columnRevealAt[item.block.col] || 0) <= state.time
     );
-    if (!targets.length) return null;
     const cannonX = slotX(slotIndex);
     return targets.sort((a, b) => {
       const ax = blockCenter(a.block).x;
       const bx = blockCenter(b.block).x;
       return a.distance - b.distance || Math.abs(ax - cannonX) - Math.abs(bx - cannonX);
-    })[0];
+    }).slice(0, limit);
   }
 
-  function slotX(index) { return state.width * ((index + .5) / state.slots.length); }
+  function getTarget(color, slotIndex) { return getTargets(color, slotIndex, 1)[0] || null; }
+
+  function resonanceLevel(index, color) {
+    let level = 1;
+    if (state.slots[index - 1]?.color === color) level++;
+    if (state.slots[index + 1]?.color === color) level++;
+    return level;
+  }
+
+  function slotX(index) {
+    const slotWidth = 58;
+    const slotCount = state.slots.length;
+    const desiredSideSpace = Math.max(16, state.width * .06);
+    const maximumSideSpace = Math.max(0, (state.width - slotWidth * slotCount) / 2);
+    const sideSpace = Math.min(desiredSideSpace, maximumSideSpace);
+    const firstCenter = sideSpace + slotWidth / 2;
+    if (slotCount === 1) return state.width / 2;
+    const step = (state.width - sideSpace * 2 - slotWidth) / (slotCount - 1);
+    return firstCenter + index * step;
+  }
   function slotY() { return state.height * (state.height < 500 ? .75 : .79); }
   function blockCenter(block) {
     return {
@@ -312,7 +337,6 @@
 
   function update(dt) {
     state.time += dt;
-    state.shake = Math.max(0, state.shake - dt * 12);
     state.blocks.forEach(b => { b.pop = Math.max(0, b.pop - dt * 5); });
 
     if (state.running) {
@@ -321,8 +345,10 @@
         cannon.cooldown -= dt;
         cannon.flash = Math.max(0, cannon.flash - dt * 7);
         cannon.recoil = Math.max(0, cannon.recoil - dt * 6);
+        cannon.pulse = Math.max(0, (cannon.pulse || 0) - dt * 2.8);
 
-        const ownedShots = state.projectiles.some(p => p.owner === cannon.id);
+        const ownedShotCount = state.projectiles.filter(p => p.owner === cannon.id).length;
+        const ownedShots = ownedShotCount > 0;
         if (cannon.ammo <= 0) {
           if (!ownedShots) state.slots[index] = null;
           return;
@@ -335,14 +361,16 @@
           return;
         }
 
-        if (cannon.cooldown <= 0 && !ownedShots) {
-          const target = getTarget(cannon.color, index);
-          if (target) fire(cannon, index, target);
+        const availableAmmo = cannon.ammo - ownedShotCount;
+        if (cannon.cooldown <= 0 && availableAmmo > 0) {
+          const level = resonanceLevel(index, cannon.color);
+          const targets = getTargets(cannon.color, index, availableAmmo);
+          if (targets.length) resonate(cannon, index, targets, level);
         }
       });
     }
 
-    state.projectiles.forEach(p => advanceRobot(p, dt));
+    state.projectiles.forEach(p => advanceEnergy(p, dt));
     state.projectiles = state.projectiles.filter(p => !p.done);
 
     state.particles.forEach(p => {
@@ -359,96 +387,74 @@
     if (state.running && state.remaining > 0 && !state.projectiles.length) checkDeadlock();
   }
 
-  function fire(cannon, index, selection) {
-    const target = selection.block;
-    const start = { x: slotX(index), y: slotY() - 18 };
-    const end = blockCenter(target);
-    const path = compactPath([
-      start,
-      ...selection.route.map(gridCellCenter),
-      end
-    ]);
-    target.reserved = true;
-    cannon.ammo--;
-    cannon.cooldown = .24;
+  function resonate(cannon, index, selections, level) {
+    const end = { x: slotX(index), y: slotY() - 6 };
+    cannon.cooldown = level > 1 ? .045 : .07;
     cannon.flash = 1;
     cannon.recoil = 1;
-    state.projectiles.push({
-      owner: cannon.id, color: cannon.color, start, end, path,
-      x: start.x, y: start.y, segment: 0, speed: 360,
-      walk: 0, direction: 1, done: false, target
+    cannon.pulse = 1;
+    selections.forEach((selection, order) => {
+      const target = selection.block;
+      const start = blockCenter(target);
+      const side = Math.sign(end.x - start.x) || (order % 2 ? 1 : -1);
+      const control = {
+        x: (start.x + end.x) / 2 + side * 18 + ((order % 5) - 2) * 5,
+        y: Math.min(start.y, end.y) - 24 - (order % 4) * 5
+      };
+      const distance = Math.hypot(end.x - start.x, end.y - start.y);
+      const duration = Math.max(.2, Math.min(.58, distance / 820));
+      // 像素一旦起飞就立即离开图案；到达核心时只结算核心数值。
+      target.alive = false;
+      target.reserved = false;
+      target.pop = 1;
+      state.remaining--;
+      state.columnRevealAt[target.col] = state.time + .035;
+      state.projectiles.push({
+        owner: cannon.id, color: cannon.color, start, end, control,
+        x: start.x, y: start.y, t: 0,
+        duration,
+        done: false, target
+      });
     });
-    tone(220 + index * 22, .055, 'triangle', .025);
+    updateProgress();
+    state.shockwaves.push({ x: end.x, y: end.y, radius: 9, life: .48, color: cannon.color });
+    tone(360 + level * 95 + index * 12, .11, 'sine', .035);
   }
 
-  function compactPath(points) {
-    const unique = points.filter((point, index) =>
-      index === 0 || Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y) > 1
-    );
-    return unique.filter((point, index) => {
-      if (index === 0 || index === unique.length - 1) return true;
-      const previous = unique[index - 1];
-      const next = unique[index + 1];
-      const sameX = Math.abs(previous.x - point.x) < 1 && Math.abs(point.x - next.x) < 1;
-      const sameY = Math.abs(previous.y - point.y) < 1 && Math.abs(point.y - next.y) < 1;
-      return !sameX && !sameY;
-    });
-  }
-
-  function gridCellCenter(cell) {
+  function curvePoint(projectile, t) {
+    const progress = Math.max(0, Math.min(1, t));
+    const inverse = 1 - progress;
     return {
-      x: state.grid.x + (cell.col + .5) * state.grid.cellX,
-      y: state.grid.y + (cell.row + .5) * state.grid.cellY
+      x: inverse * inverse * projectile.start.x + 2 * inverse * progress * projectile.control.x + progress * progress * projectile.end.x,
+      y: inverse * inverse * projectile.start.y + 2 * inverse * progress * projectile.control.y + progress * progress * projectile.end.y
     };
   }
 
-  function advanceRobot(robot, dt) {
-    let distanceLeft = robot.speed * state.speedMultiplier * dt;
-    robot.walk += dt * 12;
-
-    while (distanceLeft > 0 && !robot.done) {
-      const next = robot.path[robot.segment + 1];
-      if (!next) {
-        impact(robot);
-        return;
-      }
-
-      const dx = next.x - robot.x;
-      const dy = next.y - robot.y;
-      const distance = Math.hypot(dx, dy);
-      if (Math.abs(dx) > 1) robot.direction = Math.sign(dx);
-
-      if (distance <= distanceLeft + .01) {
-        robot.x = next.x;
-        robot.y = next.y;
-        robot.segment++;
-        distanceLeft -= distance;
-        if (robot.segment >= robot.path.length - 1) impact(robot);
-      } else {
-        robot.x += dx / distance * distanceLeft;
-        robot.y += dy / distance * distanceLeft;
-        distanceLeft = 0;
-      }
-    }
+  function advanceEnergy(energy, dt) {
+    energy.t += dt * state.speedMultiplier / energy.duration;
+    if (energy.t < 0) return;
+    const point = curvePoint(energy, energy.t);
+    energy.x = point.x;
+    energy.y = point.y;
+    if (energy.t >= 1) absorb(energy);
   }
 
-  function impact(projectile) {
+  function absorb(projectile) {
     projectile.done = true;
-    const target = projectile.target;
-    if (!target.alive) return;
-    target.alive = false;
-    target.reserved = false;
-    target.pop = 1;
-    // 命中后留出一个短暂的碎裂节拍，再开放同列后方的新目标。
-    state.columnRevealAt[target.col] = state.time + .14;
-    state.remaining--;
+    const owner = state.slots.find(cannon => cannon?.id === projectile.owner);
+    if (owner) {
+      owner.ammo = Math.max(0, owner.ammo - 1);
+      owner.flash = 1;
+      owner.pulse = 1;
+    }
     state.deadlockNotified = false;
-    state.shake = Math.min(6, state.shake + 2.5);
-    burst(projectile.end.x, projectile.end.y, projectile.color, 14);
-    state.shockwaves.push({ x: projectile.end.x, y: projectile.end.y, radius: 4, life: .36, color: projectile.color });
-    updateProgress();
-    tone(120 + Math.random() * 35, .11, 'sawtooth', .04);
-    if (state.remaining === 0) setTimeout(() => finish(true), 450);
+    burst(projectile.end.x, projectile.end.y, projectile.color, 3);
+    state.shockwaves.push({ x: projectile.end.x, y: projectile.end.y, radius: 3, life: .24, color: projectile.color });
+    const hasFlyingPixels = state.projectiles.some(energy => energy !== projectile && !energy.done);
+    if (state.remaining === 0 && !hasFlyingPixels && !state.finishing) {
+      state.finishing = true;
+      setTimeout(() => finish(true), 450);
+    }
   }
 
   function burst(x, y, color, amount) {
@@ -508,8 +514,8 @@
     state.win = win;
     setTimeout(() => {
       resultEyebrow.textContent = win ? '任务完成' : '阵地堵塞';
-      resultTitle.textContent = win ? '爆破成功！' : '换个顺序试试';
-      resultText.textContent = win ? '爆破机器人已经清除了所有色块' : '所有机器人队伍都找不到同色目标，调整上阵顺序再试一次';
+      resultTitle.textContent = win ? '共振完成！' : '换个顺序试试';
+      resultText.textContent = win ? '能量核心已经吸收了所有像素' : '所有能量核心都找不到同色目标，调整进入阵地的顺序再试一次';
       resultButton.textContent = win ? '再来一局' : '重新挑战';
       resultPanel.hidden = false;
       tone(win ? 660 : 110, .25, win ? 'sine' : 'sawtooth', .055);
@@ -523,10 +529,7 @@
 
   function draw() {
     ctx.clearRect(0, 0, state.width, state.height);
-    const sx = state.shake ? (Math.random() - .5) * state.shake : 0;
-    const sy = state.shake ? (Math.random() - .5) * state.shake : 0;
     ctx.save();
-    ctx.translate(sx, sy);
     drawBackdrop();
     drawBlocks();
     drawSlots();
@@ -587,6 +590,24 @@
   function drawSlots() {
     const y = slotY();
     ctx.textAlign = 'center';
+    for (let i = 0; i < state.slots.length - 1; i++) {
+      const left = state.slots[i];
+      const right = state.slots[i + 1];
+      if (!left || !right || left.color !== right.color) continue;
+      const palette = PALETTE[left.color];
+      const pulse = .55 + Math.sin(state.time * 10 + i) * .22;
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = palette.light;
+      ctx.lineWidth = 3;
+      ctx.shadowColor = palette.fill;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.moveTo(slotX(i) + 20, y - 6);
+      ctx.bezierCurveTo(slotX(i) + 35, y - 19, slotX(i + 1) - 35, y + 7, slotX(i + 1) - 20, y - 6);
+      ctx.stroke();
+      ctx.restore();
+    }
     for (let i = 0; i < state.slots.length; i++) {
       const x = slotX(i);
       const cannon = state.slots[i];
@@ -610,125 +631,99 @@
         ctx.stroke();
         ctx.setLineDash([]);
       } else {
-        drawCannon(cannon);
+        drawCannon(cannon, i);
       }
       ctx.restore();
     }
   }
 
-  function drawCannon(cannon) {
+  function drawCannon(cannon, index) {
     const palette = PALETTE[cannon.color];
-    const bob = Math.sin(state.time * 3 + cannon.ammo) * 1.2;
+    const level = resonanceLevel(index, cannon.color);
+    const bob = Math.sin(state.time * 3.5 + cannon.ammo) * 1.1;
+    const pulse = cannon.pulse || 0;
     ctx.fillStyle = 'rgba(39,28,75,.16)';
     ctx.beginPath();
-    ctx.ellipse(0, 25, 24, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 28, 24, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.save();
     ctx.translate(0, bob);
-    ctx.fillStyle = palette.dark;
-    roundRect(-18, -9, 36, 31, 10);
-    ctx.fill();
-    const grad = ctx.createLinearGradient(-17, -30, 17, 0);
-    grad.addColorStop(0, palette.light);
-    grad.addColorStop(.4, palette.fill);
-    grad.addColorStop(1, palette.dark);
-    ctx.fillStyle = grad;
-    roundRect(-19, -31, 38, 25, 11);
-    ctx.fill();
+    ctx.globalAlpha = .35 + pulse * .45;
+    ctx.strokeStyle = palette.light;
+    ctx.lineWidth = 2 + pulse * 3;
+    ctx.shadowColor = palette.fill;
+    ctx.shadowBlur = 12 + pulse * 15;
+    ctx.beginPath();
+    ctx.arc(0, -5, 23 + pulse * 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
 
-    ctx.strokeStyle = palette.dark;
+    ctx.save();
+    ctx.rotate(state.time * (.7 + level * .12));
+    ctx.strokeStyle = palette.light;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(0, -31);
-    ctx.lineTo(0, -38);
+    ctx.arc(0, -5, 21, -.2, 1.25);
+    ctx.arc(0, -5, 21, Math.PI - .2, Math.PI + 1.05);
     ctx.stroke();
-    ctx.fillStyle = cannon.flash > 0 ? '#ffe75b' : palette.light;
+    ctx.restore();
+
+    const grad = ctx.createRadialGradient(-6, -12, 2, 0, -5, 19);
+    grad.addColorStop(0, '#fff');
+    grad.addColorStop(.16, palette.light);
+    grad.addColorStop(.56, palette.fill);
+    grad.addColorStop(1, palette.dark);
+    ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(0, -40, 4 + cannon.flash * 3, 0, Math.PI * 2);
+    ctx.arc(0, -5, 18 + pulse * 1.5, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#312942';
-    roundRect(-14, -25, 28, 12, 6);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(-6, -19, 2.5, 0, Math.PI * 2);
-    ctx.arc(6, -19, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = palette.dark;
-    roundRect(-19, 17, 13, 11, 4);
-    ctx.fill();
-    roundRect(6, 17, 13, 11, 4);
-    ctx.fill();
-
-    ctx.fillStyle = '#fff';
-    roundRect(-15, -3, 30, 21, 8);
-    ctx.fill();
-    ctx.fillStyle = '#2b2441';
-    ctx.font = '900 13px ui-rounded, sans-serif';
-    ctx.fillText(cannon.ammo, 0, 12);
+    ctx.fillStyle = 'white';
+    ctx.font = '1000 14px ui-rounded, sans-serif';
+    ctx.shadowColor = 'rgba(20,18,35,.75)';
+    ctx.shadowBlur = 3;
+    ctx.fillText(cannon.ammo, 0, 0);
+    ctx.shadowBlur = 0;
+    if (level > 1) {
+      ctx.fillStyle = '#fff6a9';
+      ctx.font = '1000 9px ui-rounded, sans-serif';
+      ctx.fillText(`共振×${level}`, 0, 25);
+    }
     ctx.restore();
   }
 
   function drawProjectiles() {
-    state.projectiles.forEach(p => {
-      drawWalkingRobot(p);
-    });
+    state.projectiles.forEach(drawEnergyStream);
   }
 
-  function drawWalkingRobot(robot) {
-    const palette = PALETTE[robot.color];
-    const step = Math.sin(robot.walk) * 1.8;
-    const bob = Math.abs(Math.sin(robot.walk)) * 1.5;
+  function drawEnergyStream(energy) {
+    if (energy.t < 0) return;
+    const palette = PALETTE[energy.color];
+    const head = curvePoint(energy, energy.t);
+    const tail = curvePoint(energy, energy.t - .13);
     ctx.save();
-    ctx.translate(robot.x, robot.y - bob);
-    ctx.scale(robot.direction, 1);
-
-    ctx.fillStyle = 'rgba(38,28,69,.18)';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = palette.fill;
+    ctx.lineWidth = 5;
+    ctx.globalAlpha = .28;
+    ctx.shadowColor = palette.light;
+    ctx.shadowBlur = 12;
     ctx.beginPath();
-    ctx.ellipse(0, 10 + bob, 10, 3.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#29233c';
-    ctx.beginPath();
-    ctx.arc(-7, -1, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#ffdf52';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(-9, -5);
-    ctx.quadraticCurveTo(-12, -10, -8, -12);
+    ctx.moveTo(tail.x, tail.y);
+    ctx.lineTo(head.x, head.y);
     ctx.stroke();
-    ctx.fillStyle = '#ff8652';
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = palette.light;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(-8, -12, 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = palette.dark;
-    roundRect(-7, 2 + step, 5, 9, 2);
-    ctx.fill();
-    roundRect(2, 2 - step, 5, 9, 2);
-    ctx.fill();
-
-    const bodyGrad = ctx.createLinearGradient(-7, -9, 7, 7);
-    bodyGrad.addColorStop(0, palette.light);
-    bodyGrad.addColorStop(.45, palette.fill);
-    bodyGrad.addColorStop(1, palette.dark);
-    ctx.fillStyle = bodyGrad;
-    roundRect(-8, -9, 16, 15, 5);
-    ctx.fill();
-    roundRect(-9, -16, 18, 10, 5);
-    ctx.fill();
-
-    ctx.fillStyle = '#302a46';
-    roundRect(-6, -14, 12, 6, 3);
-    ctx.fill();
+    ctx.moveTo(tail.x, tail.y);
+    ctx.lineTo(head.x, head.y);
+    ctx.stroke();
     ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.arc(-2.5, -11, 1.25, 0, Math.PI * 2);
-    ctx.arc(2.5, -11, 1.25, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, 3.3, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
