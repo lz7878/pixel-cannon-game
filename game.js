@@ -2,6 +2,7 @@
   const canvas = document.querySelector('#gameCanvas');
   const ctx = canvas.getContext('2d');
   const queueEl = document.querySelector('#queue');
+  const slotCoresEl = document.querySelector('#slotCores');
   const blockCountEl = document.querySelector('#blockCount');
   const progressBar = document.querySelector('#progressBar');
   const toastEl = document.querySelector('#toast');
@@ -77,12 +78,12 @@
 
   const state = {
     width: 0, height: 0, dpr: 1,
-    blocks: [], slots: Array(6).fill(null), lanes: [[], [], []],
-    projectiles: [], particles: [], shockwaves: [], stars: [],
+    blocks: [], slots: Array(6).fill(null), pendingSlots: new Set(), lanes: [[], [], []],
+    projectiles: [], particles: [], stars: [],
     columnRevealAt: {},
     totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
     deadlockNotified: false, adLoading: false, unlockedSlots: 6,
-    muted: false, speedMultiplier: 1, time: 0, last: 0,
+    muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
 
@@ -176,12 +177,13 @@
   }
 
   function init() {
+    state.sessionId++;
     state.blocks = makeBlocks();
     state.lanes = makeQueue(state.blocks);
     state.slots = Array(6).fill(null);
+    state.pendingSlots.clear();
     state.projectiles = [];
     state.particles = [];
-    state.shockwaves = [];
     state.columnRevealAt = {};
     state.totalBlocks = state.blocks.length;
     state.remaining = state.totalBlocks;
@@ -238,6 +240,12 @@
   }
 
   function renderQueue() {
+    const previousPositions = new Map(
+      [...queueEl.querySelectorAll('.cannon-card[data-cannon-id]')].map(card => [
+        card.dataset.cannonId,
+        card.getBoundingClientRect()
+      ])
+    );
     queueEl.innerHTML = '';
     queueEl.style.setProperty('--lane-count', state.lanes.length);
     state.lanes.forEach((lane, laneIndex) => {
@@ -249,18 +257,41 @@
         lane.slice(0, 2).forEach((cannon, actualIndex) => {
           const button = document.createElement('button');
           button.className = `cannon-card ${actualIndex === 1 ? 'next' : ''}`;
+          button.dataset.cannonId = cannon.id;
           button.style.setProperty('--cannon', PALETTE[cannon.color].fill);
           button.setAttribute('aria-label', `${cannon.ammo} 点${cannon.color}色共振能量`);
           button.innerHTML = '<span class="core-orb"><i></i></span>' + `<b>${cannon.ammo}</b>`;
-          if (actualIndex === 0) button.addEventListener('click', () => deploy(laneIndex));
+          if (actualIndex === 0) button.addEventListener('click', () => deploy(laneIndex, button));
           laneEl.appendChild(button);
         });
       }
       queueEl.appendChild(laneEl);
     });
+
+    requestAnimationFrame(() => {
+      queueEl.querySelectorAll('.cannon-card[data-cannon-id]').forEach(card => {
+        const previous = previousPositions.get(card.dataset.cannonId);
+        if (previous) {
+          const current = card.getBoundingClientRect();
+          const dx = previous.left - current.left;
+          const dy = previous.top - current.top;
+          if (Math.abs(dx) > .5 || Math.abs(dy) > .5) {
+            card.animate([
+              { transform: `translate(${dx}px, ${dy}px)`, opacity: .72 },
+              { transform: 'translate(0, 0)', opacity: card.classList.contains('next') ? .48 : 1 }
+            ], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+          }
+        } else {
+          card.animate([
+            { transform: 'translateY(24px) scale(.92)', opacity: 0 },
+            { transform: 'translateY(0) scale(1)', opacity: card.classList.contains('next') ? .48 : 1 }
+          ], { duration: 240, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        }
+      });
+    });
   }
 
-  function deploy(laneIndex) {
+  function deploy(laneIndex, sourceButton) {
     if (!state.running || !state.lanes[laneIndex].length) return;
     const slotIndex = nearestEmptySlot(laneIndex);
     if (slotIndex < 0) {
@@ -268,12 +299,44 @@
       tone(130, .08, 'square', .045);
       return;
     }
+    const sourceRect = sourceButton.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const targetLeft = canvasRect.left + slotX(slotIndex) - 29;
+    const targetTop = canvasRect.top + slotY() - 38;
     const cannon = state.lanes[laneIndex].shift();
-    state.slots[slotIndex] = { ...cannon, initialAmmo: cannon.ammo, cooldown: .14, flash: 0, recoil: 0, retiring: false };
+    const sessionId = state.sessionId;
+    state.pendingSlots.add(slotIndex);
     state.deadlockNotified = false;
     renderQueue();
     tone(240, .06, 'triangle', .04);
     if (navigator.vibrate) navigator.vibrate(12);
+
+    const flight = sourceButton.cloneNode(true);
+    flight.classList.remove('next');
+    flight.classList.add('core-flight');
+    Object.assign(flight.style, {
+      position: 'fixed',
+      left: `${sourceRect.left}px`,
+      top: `${sourceRect.top}px`,
+      width: `${sourceRect.width}px`,
+      height: `${sourceRect.height}px`
+    });
+    document.body.appendChild(flight);
+    const dx = targetLeft - sourceRect.left;
+    const dy = targetTop - sourceRect.top;
+    const animation = flight.animate([
+      { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+      { transform: `translate(${dx * .5}px, ${dy * .42}px) scale(1.08) rotate(-4deg)`, opacity: 1, offset: .52 },
+      { transform: `translate(${dx}px, ${dy}px) scale(.94) rotate(0deg)`, opacity: 1 }
+    ], { duration: 320, easing: 'cubic-bezier(.2,.72,.18,1)', fill: 'forwards' });
+
+    animation.finished.catch(() => {}).then(() => {
+      flight.remove();
+      if (sessionId !== state.sessionId || !state.running) return;
+      state.pendingSlots.delete(slotIndex);
+      state.slots[slotIndex] = { ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0, retiring: false };
+      tone(430, .08, 'sine', .035);
+    });
   }
 
   function nearestEmptySlot(laneIndex) {
@@ -288,7 +351,7 @@
     return state.slots
       .slice(0, state.unlockedSlots)
       .map((cannon, index) => ({ cannon, index, distance: Math.abs(slotX(index) - laneX) }))
-      .filter(item => !item.cannon)
+      .filter(item => !item.cannon && !state.pendingSlots.has(item.index))
       .sort((a, b) => a.distance - b.distance || a.index - b.index)[0]?.index ?? -1;
   }
 
@@ -345,8 +408,6 @@
         cannon.cooldown -= dt;
         cannon.flash = Math.max(0, cannon.flash - dt * 7);
         cannon.recoil = Math.max(0, cannon.recoil - dt * 6);
-        cannon.pulse = Math.max(0, (cannon.pulse || 0) - dt * 2.8);
-
         const ownedShotCount = state.projectiles.filter(p => p.owner === cannon.id).length;
         const ownedShots = ownedShotCount > 0;
         if (cannon.ammo <= 0) {
@@ -381,9 +442,6 @@
       p.rotation += p.spin * dt;
     });
     state.particles = state.particles.filter(p => p.life > 0);
-    state.shockwaves.forEach(s => { s.life -= dt; s.radius += dt * 95; });
-    state.shockwaves = state.shockwaves.filter(s => s.life > 0);
-
     if (state.running && state.remaining > 0 && !state.projectiles.length) checkDeadlock();
   }
 
@@ -392,7 +450,6 @@
     cannon.cooldown = level > 1 ? .045 : .07;
     cannon.flash = 1;
     cannon.recoil = 1;
-    cannon.pulse = 1;
     selections.forEach((selection, order) => {
       const target = selection.block;
       const start = blockCenter(target);
@@ -402,7 +459,7 @@
         y: Math.min(start.y, end.y) - 24 - (order % 4) * 5
       };
       const distance = Math.hypot(end.x - start.x, end.y - start.y);
-      const duration = Math.max(.2, Math.min(.58, distance / 820));
+      const duration = Math.max(.28, Math.min(.82, distance / 600));
       // 像素一旦起飞就立即离开图案；到达核心时只结算核心数值。
       target.alive = false;
       target.reserved = false;
@@ -417,7 +474,6 @@
       });
     });
     updateProgress();
-    state.shockwaves.push({ x: end.x, y: end.y, radius: 9, life: .48, color: cannon.color });
     tone(360 + level * 95 + index * 12, .11, 'sine', .035);
   }
 
@@ -445,11 +501,9 @@
     if (owner) {
       owner.ammo = Math.max(0, owner.ammo - 1);
       owner.flash = 1;
-      owner.pulse = 1;
     }
     state.deadlockNotified = false;
     burst(projectile.end.x, projectile.end.y, projectile.color, 3);
-    state.shockwaves.push({ x: projectile.end.x, y: projectile.end.y, radius: 3, life: .24, color: projectile.color });
     const hasFlyingPixels = state.projectiles.some(energy => energy !== projectile && !energy.done);
     if (state.remaining === 0 && !hasFlyingPixels && !state.finishing) {
       state.finishing = true;
@@ -528,6 +582,7 @@
   }
 
   function draw() {
+    syncSlotCores();
     ctx.clearRect(0, 0, state.width, state.height);
     ctx.save();
     drawBackdrop();
@@ -630,68 +685,36 @@
         roundRect(-29, -39, 58, 76, 14);
         ctx.stroke();
         ctx.setLineDash([]);
-      } else {
-        drawCannon(cannon, i);
       }
       ctx.restore();
     }
   }
 
-  function drawCannon(cannon, index) {
-    const palette = PALETTE[cannon.color];
-    const level = resonanceLevel(index, cannon.color);
-    const bob = Math.sin(state.time * 3.5 + cannon.ammo) * 1.1;
-    const pulse = cannon.pulse || 0;
-    ctx.fillStyle = 'rgba(39,28,75,.16)';
-    ctx.beginPath();
-    ctx.ellipse(0, 28, 24, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.save();
-    ctx.translate(0, bob);
-    ctx.globalAlpha = .35 + pulse * .45;
-    ctx.strokeStyle = palette.light;
-    ctx.lineWidth = 2 + pulse * 3;
-    ctx.shadowColor = palette.fill;
-    ctx.shadowBlur = 12 + pulse * 15;
-    ctx.beginPath();
-    ctx.arc(0, -5, 23 + pulse * 7, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.shadowBlur = 0;
-
-    ctx.save();
-    ctx.rotate(state.time * (.7 + level * .12));
-    ctx.strokeStyle = palette.light;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(0, -5, 21, -.2, 1.25);
-    ctx.arc(0, -5, 21, Math.PI - .2, Math.PI + 1.05);
-    ctx.stroke();
-    ctx.restore();
-
-    const grad = ctx.createRadialGradient(-6, -12, 2, 0, -5, 19);
-    grad.addColorStop(0, '#fff');
-    grad.addColorStop(.16, palette.light);
-    grad.addColorStop(.56, palette.fill);
-    grad.addColorStop(1, palette.dark);
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(0, -5, 18 + pulse * 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = 'white';
-    ctx.font = '1000 14px ui-rounded, sans-serif';
-    ctx.shadowColor = 'rgba(20,18,35,.75)';
-    ctx.shadowBlur = 3;
-    ctx.fillText(cannon.ammo, 0, 0);
-    ctx.shadowBlur = 0;
-    if (level > 1) {
-      ctx.fillStyle = '#fff6a9';
-      ctx.font = '1000 9px ui-rounded, sans-serif';
-      ctx.fillText(`共振×${level}`, 0, 25);
-    }
-    ctx.restore();
+  function syncSlotCores() {
+    const activeIds = new Set();
+    state.slots.forEach((cannon, index) => {
+      if (!cannon) return;
+      activeIds.add(cannon.id);
+      let core = slotCoresEl.querySelector(`[data-cannon-id="${cannon.id}"]`);
+      if (!core) {
+        core = document.createElement('button');
+        core.type = 'button';
+        core.tabIndex = -1;
+        core.className = 'cannon-card slot-cannon';
+        core.dataset.cannonId = cannon.id;
+        core.innerHTML = '<span class="core-orb"><i></i></span><b></b>';
+        slotCoresEl.appendChild(core);
+      }
+      core.style.setProperty('--cannon', PALETTE[cannon.color].fill);
+      core.style.left = `${slotX(index) - 29}px`;
+      core.style.top = `${slotY() - 39}px`;
+      const ammoEl = core.querySelector('b');
+      const ammo = String(cannon.ammo);
+      if (ammoEl.textContent !== ammo) ammoEl.textContent = ammo;
+    });
+    slotCoresEl.querySelectorAll('.slot-cannon').forEach(core => {
+      if (!activeIds.has(core.dataset.cannonId)) core.remove();
+    });
   }
 
   function drawProjectiles() {
@@ -729,15 +752,6 @@
   }
 
   function drawEffects() {
-    state.shockwaves.forEach(s => {
-      ctx.globalAlpha = s.life / .42;
-      ctx.strokeStyle = PALETTE[s.color].light;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    });
     state.particles.forEach(p => {
       ctx.save();
       ctx.globalAlpha = Math.min(1, p.life * 2.3);
