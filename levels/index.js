@@ -27,8 +27,8 @@ export async function loadLevel(id) {
   const loader = modules[`./${id}/index.js`];
   if (!loader) throw new Error(`未知关卡：${id}`);
   const level = (await loader()).default;
-  if (!Array.isArray(level.art) || !Array.isArray(level.queueArt)) {
-    throw new Error(`关卡 ${id} 的 art 和 queueArt 必须是数组`);
+  if (!Array.isArray(level.art) || (!Array.isArray(level.queueArt) && !Array.isArray(level.queue))) {
+    throw new Error(`关卡 ${id} 必须包含 art，以及 queueArt 或 queue`);
   }
   return { ...level, id };
 }

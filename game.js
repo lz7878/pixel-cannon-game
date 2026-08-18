@@ -51,18 +51,19 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
 
   const state = {
     width: 0, height: 0, dpr: 1,
-    blocks: [], slots: Array(6).fill(null), pendingSlots: new Set(), lanes: [[], [], []],
+    blocks: [], slots: Array(6).fill(null), pendingSlots: new Set(), lanes: [],
     projectiles: [], particles: [], stars: [],
     columnRevealAt: {},
     totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
     deadlockNotified: false, adLoading: false, unlockedSlots: 6,
     muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0,
-    levelId: getLevelId(START_LEVEL), level: null, loadingLevel: false, loadRequest: 0,
+    levelId: getLevelId(START_LEVEL), level: null, loadingLevel: false, loadRequest: 0, ready: false,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
 
   let audioContext = null;
   let toastTimer = null;
+  let pixelRevealFrame = 0;
 
   function currentLevel() { return state.level; }
   function currentArt() { return currentLevel().art; }
@@ -136,13 +137,30 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       counts[block.color] = (counts[block.color] || 0) + 1;
       return counts;
     }, {});
+    const configuredQueue = currentLevel().queue;
+    if (configuredQueue) {
+      const provided = configuredQueue.flat().reduce((counts, cannon) => {
+        counts[cannon.color] = (counts[cannon.color] || 0) + cannon.ammo;
+        return counts;
+      }, {});
+      const colors = new Set([...Object.keys(totals), ...Object.keys(provided)]);
+      const invalid = [...colors].find(color => totals[color] !== provided[color]);
+      if (invalid) {
+        throw new Error(`关卡 ${state.levelId} 的 ${invalid} 色能量配置为 ${provided[invalid] || 0}，应为 ${totals[invalid] || 0}`);
+      }
+      return configuredQueue.map((lane, laneIndex) => lane.map((cannon, cannonIndex) => ({
+        ...cannon,
+        id: `cannon-${laneIndex}-${cannonIndex}`
+      })));
+    }
+
     const queueArt = currentLevel().queueArt;
     const occurrences = [...queueArt.join('')].reduce((counts, color) => {
       if (color !== '.') counts[color] = (counts[color] || 0) + 1;
       return counts;
     }, {});
     const used = {};
-    const lanes = Array.from({ length: 3 }, () => []);
+    const lanes = Array.from({ length: Math.max(...queueArt.map(row => row.length)) }, () => []);
 
     queueArt.forEach((row, rowIndex) => [...row].forEach((color, laneIndex) => {
       if (color === '.') return;
@@ -160,6 +178,13 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const request = ++state.loadRequest;
     state.loadingLevel = true;
     state.running = false;
+    state.ready = false;
+    // Pixi 初始化和重建纹理之间会自动跑一帧；先完全隐藏该层，避免旧尺寸纹理
+    // 被浏览器拉伸成左上角的白色残影。
+    cancelAnimationFrame(pixelRevealFrame);
+    pixelLayer.visible = false;
+    pixiCanvas.style.visibility = 'hidden';
+    canvas.style.visibility = 'hidden';
     resultPanel.hidden = true;
     try {
       const level = await loadLevel(levelId);
@@ -201,9 +226,21 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     renderQueue();
     updateProgress();
     resize();
+    state.ready = true;
+    const sessionId = state.sessionId;
+    pixelRevealFrame = requestAnimationFrame(() => {
+      // 等一帧让 renderer 吃到新尺寸和新纹理，再显示像素层。
+      pixelRevealFrame = requestAnimationFrame(() => {
+        if (sessionId !== state.sessionId) return;
+        pixelLayer.visible = true;
+        pixiCanvas.style.visibility = 'visible';
+        canvas.style.visibility = 'visible';
+      });
+    });
   }
 
   function resize() {
+    if (!state.level) return;
     const rect = canvas.getBoundingClientRect();
     state.dpr = Math.min(window.devicePixelRatio || 1, 2);
     state.width = rect.width;
@@ -866,8 +903,10 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
   function loop(now) {
     const dt = Math.min(.033, (now - (state.last || now)) / 1000);
     state.last = now;
-    update(dt);
-    draw();
+    if (state.ready) {
+      update(dt);
+      draw();
+    }
     requestAnimationFrame(loop);
   }
 
