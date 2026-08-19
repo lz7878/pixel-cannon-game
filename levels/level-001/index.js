@@ -36,6 +36,22 @@ const ART = [
   '.........KKKKK......KKKKK.........'
 ];
 
-const QUEUE_ART = ['KKK', 'RRK', 'RRR', 'GDR', 'GKK', 'KKK', 'WGD', 'W..'];
+const QUEUE = [
+  [
+    { color: 'K', ammo: 33 }, { color: 'R', ammo: 34 }, { color: 'R', ammo: 34 },
+    { color: 'G', ammo: 20 }, { color: 'G', ammo: 20 }, { color: 'K', ammo: 33 },
+    { color: 'W', ammo: 10 }, { color: 'W', ammo: 11 }
+  ],
+  [
+    { color: 'K', ammo: 33 }, { color: 'R', ammo: 34 }, { color: 'R', ammo: 34 },
+    { color: 'D', ammo: 19 }, { color: 'R', ammo: 35 }, { color: 'R', ammo: 35 },
+    { color: 'G', ammo: 20 }
+  ],
+  [
+    { color: 'K', ammo: 33 }, { color: 'K', ammo: 33 }, { color: 'R', ammo: 34 },
+    { color: 'R', ammo: 34 }, { color: 'R', ammo: 35 }, { color: 'R', ammo: 35 },
+    { color: 'D', ammo: 19 }
+  ]
+];
 
-export default { art: ART, queueArt: QUEUE_ART };
+export default { art: ART, queue: QUEUE };
