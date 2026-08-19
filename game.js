@@ -48,6 +48,8 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
   };
   const MAX_ACTIVE_ABSORPTIONS = 30;
   const BLOCKED_LAUNCH_DELAY = .2;
+  const READY_TARGET_BATCH_SIZE = 8;
+  const SEQUENCED_LAUNCH_DELAY = .055;
 
   const state = {
     width: 0, height: 0, dpr: 1,
@@ -75,7 +77,55 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     currentArt().forEach((row, r) => [...row].forEach((color, c) => {
       if (color !== '.') blocks.push({ id: `${r}-${c}`, row: r, col: c, color, alive: true, reserved: false, pop: 0 });
     }));
+    assignColorComponents(blocks);
     return blocks;
+  }
+
+  function assignColorComponents(blocks) {
+    const byCell = new Map(blocks.map(block => [cellKey(block.row, block.col), block]));
+    let componentIndex = 0;
+    blocks.forEach(block => {
+      if (block.componentId) return;
+      const componentId = block.color + '-' + componentIndex++;
+      const queue = [block];
+      block.componentId = componentId;
+      for (let head = 0; head < queue.length; head++) {
+        const current = queue[head];
+        [[-1, 0], [1, 0], [0, -1], [0, 1]].forEach(([rowOffset, colOffset]) => {
+          const next = byCell.get(cellKey(current.row + rowOffset, current.col + colOffset));
+          if (next && next.color === block.color && !next.componentId) {
+            next.componentId = componentId;
+            queue.push(next);
+          }
+        });
+      }
+    });
+  }
+
+  function makeComponentDistances(blocks, origin) {
+    const byCell = new Map(blocks.map(block => [cellKey(block.row, block.col), block]));
+    const distances = new Map([[origin.id, 0]]);
+    const queue = [origin];
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head];
+      GRID_DIRECTIONS.forEach(direction => {
+        const next = byCell.get(cellKey(current.row + direction.row, current.col + direction.col));
+        if (next && next.componentId === origin.componentId && !distances.has(next.id)) {
+          distances.set(next.id, distances.get(current.id) + 1);
+          queue.push(next);
+        }
+      });
+    }
+    return distances;
+  }
+
+  function touchesFrontier(block, frontier) {
+    if (!frontier?.size) return false;
+    for (const key of frontier) {
+      const [row, col] = key.split(',').map(Number);
+      if (Math.abs(block.row - row) + Math.abs(block.col - col) === 1) return true;
+    }
+    return false;
   }
 
   const GRID_DIRECTIONS = [
@@ -89,7 +139,10 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const rows = currentArt().length;
     const cols = currentArt()[0].length;
     const alive = blocks.filter(block => block.alive);
-    const occupied = new Set(alive.map(block => cellKey(block.row, block.col)));
+    // 已经预定、但尚未起飞的块仍然占位；不能提前穿过它吸里面一层。
+    const occupied = new Set(blocks
+      .filter(block => block.alive || block.launchPending)
+      .map(block => cellKey(block.row, block.col)));
     const start = { row: rows, col: Math.max(-1, Math.min(cols, startCol)) };
     const startKey = cellKey(start.row, start.col);
     const queue = [start];
@@ -410,7 +463,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const canvasRect = canvas.getBoundingClientRect();
     const targetLeft = canvasRect.left + slotX(slotIndex) - 29;
     const targetTop = canvasRect.top + slotY() - 38;
-    const cannon = state.lanes[laneIndex].shift();
+    const cannon = { ...state.lanes[laneIndex].shift(), laneIndex };
     const sessionId = state.sessionId;
     state.pendingSlots.add(slotIndex);
     state.deadlockNotified = false;
@@ -441,7 +494,8 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       flight.remove();
       if (sessionId !== state.sessionId || !state.running) return;
       state.pendingSlots.delete(slotIndex);
-      state.slots[slotIndex] = { ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0, retiring: false };
+      state.slots[slotIndex] = { ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0, retiring: false, activeComponent: null, componentFrontier: new Set(), componentDistances: null };
+      launchAvailableTargets(state.slots[slotIndex], slotIndex);
       tone(430, .08, 'sine', .035);
     });
   }
@@ -457,22 +511,80 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       .sort((a, b) => a.distance - b.distance || a.index - b.index)[0]?.index ?? -1;
   }
 
-  function getTargets(color, slotIndex, limit = 1) {
+  function returnCannonToQueue(slotIndex, cannon) {
+    // 同色块还在、但当前路径已经被其他颜色封住时，不能让核心一直占着阵地。
+    // 把剩余能量原样放回所属队列的最前面；之后路径打开还能继续使用这颗核心。
+    const laneIndex = cannon.laneIndex;
+    if (!Number.isInteger(laneIndex) || !state.lanes[laneIndex]) return;
+    state.lanes[laneIndex].unshift({ id: cannon.id, color: cannon.color, ammo: cannon.ammo, laneIndex });
+    state.slots[slotIndex] = null;
+    state.deadlockNotified = false;
+    renderQueue();
+  }
+
+  function getTargets(color, slotIndex, limit = 1, cannon = null) {
     const startCol = Math.max(0, Math.min(currentArt()[0].length - 1,
       Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cellX)
     ));
-    const targets = findReachableTargets(state.blocks, startCol).filter(item =>
+    const cannonX = slotX(slotIndex);
+    const candidates = findReachableTargets(state.blocks, startCol).filter(item =>
       item.block.color === color && (state.columnRevealAt[item.block.col] || 0) <= state.time
     );
-    const cannonX = slotX(slotIndex);
-    return targets.sort((a, b) => {
+    let componentHasBlocks = cannon?.activeComponent && state.blocks.some(block =>
+      block.componentId === cannon.activeComponent && (block.alive || block.launchPending)
+    );
+    // 连通岛清完后必须清锁；下一次命中才会锁定新的同色岛。
+    if (cannon?.activeComponent && !componentHasBlocks) {
+      cannon.activeComponent = null;
+      cannon.componentFrontier = new Set();
+      cannon.componentDistances = null;
+      componentHasBlocks = false;
+    }
+    const componentCandidates = componentHasBlocks
+      ? candidates.filter(item => item.block.componentId === cannon.activeComponent)
+      : candidates;
+    // 锁定区域后优先从已清除块的相邻边缘继续扩张。
+    let pool = componentHasBlocks
+      ? componentCandidates.filter(item => touchesFrontier(item.block, cannon.componentFrontier))
+      : componentCandidates;
+
+    // 当前连通岛没有可达前沿时不能永久卡住。解除锁定并重新选择已可达的
+    // 同色块；原区域一旦重新暴露，也会在下一次扫描中被主动吸附。
+    if (componentHasBlocks && !pool.length) {
+      cannon.activeComponent = null;
+      cannon.componentFrontier = new Set();
+      cannon.componentDistances = null;
+      componentHasBlocks = false;
+      pool = candidates;
+    }
+    return pool.sort((a, b) => {
+      const aStep = cannon?.componentDistances?.get(a.block.id) ?? Infinity;
+      const bStep = cannon?.componentDistances?.get(b.block.id) ?? Infinity;
       const ax = blockCenter(a.block).x;
       const bx = blockCenter(b.block).x;
-      return a.distance - b.distance || Math.abs(ax - cannonX) - Math.abs(bx - cannonX);
+      return aStep - bStep || a.distance - b.distance || Math.abs(ax - cannonX) - Math.abs(bx - cannonX);
     }).slice(0, limit);
   }
 
-  function getTarget(color, slotIndex) { return getTargets(color, slotIndex, 1)[0] || null; }
+  function getTarget(color, slotIndex, cannon = null) { return getTargets(color, slotIndex, 1, cannon)[0] || null; }
+
+  function launchAvailableTargets(cannon, slotIndex) {
+    const ownedShotCount = state.projectiles.filter(projectile => projectile.owner === cannon.id).length;
+    const availableAmmo = Math.max(0, Math.min(
+      cannon.ammo - ownedShotCount,
+      MAX_ACTIVE_ABSORPTIONS - state.projectiles.length,
+      READY_TARGET_BATCH_SIZE
+    ));
+    if (!availableAmmo) return;
+
+    let targets = getTargets(cannon.color, slotIndex, availableAmmo, cannon);
+    if (!targets.length) return;
+    // 首次部署只锁定排在最前的同色连通岛，不能跨岛预订目标。
+    if (!cannon.activeComponent) {
+      targets = targets.filter(target => target.block.componentId === targets[0].block.componentId);
+    }
+    resonate(cannon, slotIndex, targets, SEQUENCED_LAUNCH_DELAY);
+  }
 
   function markAdjacentTargetsExposed(block) {
     state.blocks.forEach(candidate => {
@@ -525,15 +637,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
           return;
         }
 
-        // 全场飞行像素达到上限时暂停吸附，避免多个阵地同时批量发射造成卡顿。
-        const availableAmmo = Math.max(0, Math.min(
-          cannon.ammo - ownedShotCount,
-          MAX_ACTIVE_ABSORPTIONS - state.projectiles.length
-        ));
-        if (cannon.cooldown <= 0 && availableAmmo > 0) {
-          const targets = getTargets(cannon.color, index, availableAmmo);
-          if (targets.length) resonate(cannon, index, targets);
-        }
+        if (cannon.cooldown <= 0) launchAvailableTargets(cannon, index);
       });
     }
 
@@ -551,13 +655,19 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     if (state.running && state.remaining > 0 && !state.projectiles.length) checkDeadlock();
   }
 
-  function resonate(cannon, index, selections) {
+  function resonate(cannon, index, selections, launchGap = 0) {
     const end = { x: slotX(index), y: slotY() - 6 };
     cannon.cooldown = .07;
     cannon.flash = 1;
     cannon.recoil = 1;
     selections.forEach((selection, order) => {
       const target = selection.block;
+      if (!cannon.activeComponent) {
+        cannon.activeComponent = target.componentId;
+        cannon.componentFrontier = new Set();
+        cannon.componentDistances = makeComponentDistances(state.blocks, target);
+      }
+      cannon.componentFrontier.add(cellKey(target.row, target.col));
       const exposedAt = target.exposedAt;
       const start = blockCenter(target);
       const side = Math.sign(end.x - start.x) || (order % 2 ? 1 : -1);
@@ -578,7 +688,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       state.projectiles.push({
         owner: cannon.id, color: cannon.color, start, end, control,
         x: start.x, y: start.y, t: 0,
-        delay: state.time - (exposedAt ?? -Infinity) < .5 ? BLOCKED_LAUNCH_DELAY : 0,
+        delay: (state.time - (exposedAt ?? -Infinity) < .5 ? BLOCKED_LAUNCH_DELAY : 0) + order * launchGap,
         started: false,
         duration,
         done: false, target
@@ -648,16 +758,20 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     if (Object.values(state.columnRevealAt).some(readyAt => readyAt > state.time)) return;
     const occupied = state.slots.slice(0, state.unlockedSlots).filter(Boolean);
     if (occupied.length < state.unlockedSlots) return;
-    const canShoot = occupied.some((cannon, i) => getTarget(cannon.color, state.slots.indexOf(cannon)));
-    if (!canShoot && state.unlockedSlots < 5) {
-      if (!state.deadlockNotified) {
-        state.deadlockNotified = true;
-        toast('机器人阵地堵住了，可以看视频解锁第 5 个阵地');
-        tone(105, .14, 'sawtooth', .035);
+    const canShoot = occupied.some((cannon, i) => getTarget(cannon.color, state.slots.indexOf(cannon), cannon));
+    if (!canShoot) {
+      const stalledSlotIndex = state.slots.findIndex((cannon, index) =>
+        index < state.unlockedSlots && cannon && !getTarget(cannon.color, index, cannon)
+      );
+      if (stalledSlotIndex >= 0) {
+        returnCannonToQueue(stalledSlotIndex, state.slots[stalledSlotIndex]);
+        toast('路径暂时受阻，核心已返回队列');
+        tone(180, .08, 'triangle', .03);
+      } else {
+        finish(false);
       }
       return;
     }
-    if (!canShoot) finish(false);
   }
 
   function requestAdUnlock() {
