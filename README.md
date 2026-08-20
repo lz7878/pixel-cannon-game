@@ -66,4 +66,8 @@ python3 tools/image_to_art.py reference.png \
 
 当前识别字符包括：`K` 黑、`R` 红、`W` 白、`G` 绿、`D` 深绿、`P/M` 两种粉、`C/B` 两种蓝、`Y` 黄、`O` 橙、`.` 空白。脚本会同时输出关卡的专属调色板，避免不同图片的相近颜色被游戏统一替换。
 
+## 机制文档
+
+- [吸附逻辑](docs/absorption-logic.md)：固定圆心的半径搜索、同色连通扩散与可达性约束。
+
 当前版本是用于验证核心玩法的 Web 原型。视频按钮目前用 1.1 秒延时模拟完整播放回调；接入抖音小游戏时，在激励视频 `onClose({ isEnded: true })` 回调中调用 `unlockExtraSlot()`，并继续接入生命周期、存档与分享 API。

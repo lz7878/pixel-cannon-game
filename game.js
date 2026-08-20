@@ -48,8 +48,6 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
   };
   const MAX_ACTIVE_ABSORPTIONS = 30;
   const BLOCKED_LAUNCH_DELAY = .2;
-  const READY_TARGET_BATCH_SIZE = 8;
-  const SEQUENCED_LAUNCH_DELAY = .055;
 
   const state = {
     width: 0, height: 0, dpr: 1,
@@ -77,55 +75,45 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     currentArt().forEach((row, r) => [...row].forEach((color, c) => {
       if (color !== '.') blocks.push({ id: `${r}-${c}`, row: r, col: c, color, alive: true, reserved: false, pop: 0 });
     }));
-    assignColorComponents(blocks);
     return blocks;
   }
 
-  function assignColorComponents(blocks) {
-    const byCell = new Map(blocks.map(block => [cellKey(block.row, block.col), block]));
-    let componentIndex = 0;
-    blocks.forEach(block => {
-      if (block.componentId) return;
-      const componentId = block.color + '-' + componentIndex++;
-      const queue = [block];
-      block.componentId = componentId;
-      for (let head = 0; head < queue.length; head++) {
-        const current = queue[head];
-        [[-1, 0], [1, 0], [0, -1], [0, 1]].forEach(([rowOffset, colOffset]) => {
-          const next = byCell.get(cellKey(current.row + rowOffset, current.col + colOffset));
-          if (next && next.color === block.color && !next.componentId) {
-            next.componentId = componentId;
-            queue.push(next);
-          }
-        });
-      }
-    });
+  function areOrthogonallyAdjacent(a, b) {
+    return Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
   }
 
-  function makeComponentDistances(blocks, origin) {
-    const byCell = new Map(blocks.map(block => [cellKey(block.row, block.col), block]));
-    const distances = new Map([[origin.id, 0]]);
-    const queue = [origin];
-    for (let head = 0; head < queue.length; head++) {
-      const current = queue[head];
-      GRID_DIRECTIONS.forEach(direction => {
-        const next = byCell.get(cellKey(current.row + direction.row, current.col + direction.col));
-        if (next && next.componentId === origin.componentId && !distances.has(next.id)) {
-          distances.set(next.id, distances.get(current.id) + 1);
-          queue.push(next);
-        }
-      });
-    }
-    return distances;
+  function blockDistance(a, b) {
+    const aCenter = blockCenter(a);
+    const bCenter = blockCenter(b);
+    return Math.hypot(aCenter.x - bCenter.x, aCenter.y - bCenter.y);
   }
 
-  function touchesFrontier(block, frontier) {
+  function touchesSnapFrontier(block, frontier) {
     if (!frontier?.size) return false;
     for (const key of frontier) {
       const [row, col] = key.split(',').map(Number);
       if (Math.abs(block.row - row) + Math.abs(block.col - col) === 1) return true;
     }
     return false;
+  }
+
+  function makeSnapGroup(anchor, color) {
+    const sameColorBlocks = state.blocks.filter(block =>
+      block.alive && !block.reserved && block.color === color
+    );
+    // 搜索圆只负责命中连通组；组内仍严格沿同色四邻接扩散，
+    // 因此可以越过当前搜索半径，但不会跨越空格或对角线。
+    const grouped = new Set([anchor.id]);
+    const queue = [anchor];
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head];
+      sameColorBlocks.forEach(candidate => {
+        if (grouped.has(candidate.id) || !areOrthogonallyAdjacent(current, candidate)) return;
+        grouped.add(candidate.id);
+        queue.push(candidate);
+      });
+    }
+    return grouped;
   }
 
   const GRID_DIRECTIONS = [
@@ -494,7 +482,11 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       flight.remove();
       if (sessionId !== state.sessionId || !state.running) return;
       state.pendingSlots.delete(slotIndex);
-      state.slots[slotIndex] = { ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0, retiring: false, activeComponent: null, componentFrontier: new Set(), componentDistances: null };
+      state.slots[slotIndex] = {
+        ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0,
+        retiring: false, activeSnapGroup: null, snapAnchorId: null,
+        snapCenterId: null, snapRadius: 0, snapFrontier: new Set()
+      };
       launchAvailableTargets(state.slots[slotIndex], slotIndex);
       tone(430, .08, 'sine', .035);
     });
@@ -526,43 +518,72 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const startCol = Math.max(0, Math.min(currentArt()[0].length - 1,
       Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cellX)
     ));
-    const cannonX = slotX(slotIndex);
     const candidates = findReachableTargets(state.blocks, startCol).filter(item =>
       item.block.color === color && (state.columnRevealAt[item.block.col] || 0) <= state.time
     );
-    let componentHasBlocks = cannon?.activeComponent && state.blocks.some(block =>
-      block.componentId === cannon.activeComponent && (block.alive || block.launchPending)
+    const hasSnapTargets = cannon?.activeSnapGroup && state.blocks.some(block =>
+      cannon.activeSnapGroup.has(block.id) && (block.alive || block.launchPending)
     );
-    // 连通岛清完后必须清锁；下一次命中才会锁定新的同色岛。
-    if (cannon?.activeComponent && !componentHasBlocks) {
-      cannon.activeComponent = null;
-      cannon.componentFrontier = new Set();
-      cannon.componentDistances = null;
-      componentHasBlocks = false;
+    // 当前连通组完全离开后，保留固定圆心和半径，继续向外找下一组。
+    if (cannon?.activeSnapGroup && !hasSnapTargets) {
+      cannon.activeSnapGroup = null;
+      cannon.snapAnchorId = null;
+      cannon.snapFrontier = new Set();
     }
-    const componentCandidates = componentHasBlocks
-      ? candidates.filter(item => item.block.componentId === cannon.activeComponent)
-      : candidates;
-    // 锁定区域后优先从已清除块的相邻边缘继续扩张。
-    let pool = componentHasBlocks
-      ? componentCandidates.filter(item => touchesFrontier(item.block, cannon.componentFrontier))
-      : componentCandidates;
 
-    // 当前连通岛没有可达前沿时不能永久卡住。解除锁定并重新选择已可达的
-    // 同色块；原区域一旦重新暴露，也会在下一次扫描中被主动吸附。
-    if (componentHasBlocks && !pool.length) {
-      cannon.activeComponent = null;
-      cannon.componentFrontier = new Set();
-      cannon.componentDistances = null;
-      componentHasBlocks = false;
-      pool = candidates;
+    if (cannon && !cannon.snapCenterId && candidates.length) {
+      // 第一发保持原规则：按炮台出发的可达路径距离确定固定圆心。
+      const anchor = candidates.slice().sort((a, b) => a.distance - b.distance)[0].block;
+      cannon.snapCenterId = anchor.id;
+      cannon.snapRadius = 0;
+      cannon.activeSnapGroup = makeSnapGroup(anchor, color);
+      cannon.snapAnchorId = anchor.id;
+      cannon.snapFrontier = new Set();
+    } else if (cannon && !cannon.activeSnapGroup && cannon.snapCenterId && candidates.length) {
+      // 一个连通组清完后，从固定圆心继续扩大半径，命中最近的下一组。
+      const center = state.blocks.find(block => block.id === cannon.snapCenterId);
+      const anchor = candidates.slice().sort((a, b) =>
+        blockDistance(a.block, center) - blockDistance(b.block, center) || a.distance - b.distance
+      )[0].block;
+      cannon.snapRadius = Math.max(cannon.snapRadius, blockDistance(anchor, center));
+      cannon.activeSnapGroup = makeSnapGroup(anchor, color);
+      cannon.snapAnchorId = anchor.id;
+      cannon.snapFrontier = new Set();
+    }
+
+    let pool = candidates;
+    let groupCandidates = [];
+    if (cannon?.activeSnapGroup) {
+      const center = state.blocks.find(block => block.id === cannon.snapCenterId);
+      // 搜索圆和连通扩散都只能从当前真实可达的候选中取点。
+      // 连通组可以决定后续方向，但不能绕过外层阻挡直接吸走内部方块。
+      groupCandidates = candidates.filter(item =>
+        cannon.activeSnapGroup.has(item.block.id)
+      );
+      // 每一轮先清掉搜索圆内的同色块；圆内清空后，再从已离开的格子
+      // 沿四邻接关系向圆外扩散，直到当前连通组彻底断开。
+      const insideRadius = groupCandidates.filter(item =>
+        blockDistance(item.block, center) <= cannon.snapRadius + .01
+      );
+      pool = insideRadius.length
+        ? insideRadius
+        : groupCandidates.filter(item => touchesSnapFrontier(item.block, cannon.snapFrontier));
+      pool.forEach(item => { item.distance = blockDistance(item.block, center); });
+    }
+    const groupHasPendingLaunch = cannon?.activeSnapGroup && state.blocks.some(block =>
+      cannon.activeSnapGroup.has(block.id) && block.launchPending
+    );
+    // 当前组的像素都不可达、也没有正在起飞的像素能继续打开路径时，
+    // 不能让核心永久锁在旧组；保留圆心和半径，改找其他可达同色组。
+    if (cannon?.activeSnapGroup && !pool.length && !groupCandidates.length &&
+      !groupHasPendingLaunch && candidates.length) {
+      cannon.activeSnapGroup = null;
+      cannon.snapAnchorId = null;
+      cannon.snapFrontier = new Set();
+      return getTargets(color, slotIndex, limit, cannon);
     }
     return pool.sort((a, b) => {
-      const aStep = cannon?.componentDistances?.get(a.block.id) ?? Infinity;
-      const bStep = cannon?.componentDistances?.get(b.block.id) ?? Infinity;
-      const ax = blockCenter(a.block).x;
-      const bx = blockCenter(b.block).x;
-      return aStep - bStep || a.distance - b.distance || Math.abs(ax - cannonX) - Math.abs(bx - cannonX);
+      return a.distance - b.distance || a.block.row - b.block.row || a.block.col - b.block.col;
     }).slice(0, limit);
   }
 
@@ -572,18 +593,14 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const ownedShotCount = state.projectiles.filter(projectile => projectile.owner === cannon.id).length;
     const availableAmmo = Math.max(0, Math.min(
       cannon.ammo - ownedShotCount,
-      MAX_ACTIVE_ABSORPTIONS - state.projectiles.length,
-      READY_TARGET_BATCH_SIZE
+      MAX_ACTIVE_ABSORPTIONS - state.projectiles.length
     ));
     if (!availableAmmo) return;
 
-    let targets = getTargets(cannon.color, slotIndex, availableAmmo, cannon);
+    // 一次只确定一格，让圆外的连通扩散保持清晰的逐格波纹。
+    let targets = getTargets(cannon.color, slotIndex, 1, cannon);
     if (!targets.length) return;
-    // 首次部署只锁定排在最前的同色连通岛，不能跨岛预订目标。
-    if (!cannon.activeComponent) {
-      targets = targets.filter(target => target.block.componentId === targets[0].block.componentId);
-    }
-    resonate(cannon, slotIndex, targets, SEQUENCED_LAUNCH_DELAY);
+    resonate(cannon, slotIndex, targets);
   }
 
   function markAdjacentTargetsExposed(block) {
@@ -662,12 +679,6 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     cannon.recoil = 1;
     selections.forEach((selection, order) => {
       const target = selection.block;
-      if (!cannon.activeComponent) {
-        cannon.activeComponent = target.componentId;
-        cannon.componentFrontier = new Set();
-        cannon.componentDistances = makeComponentDistances(state.blocks, target);
-      }
-      cannon.componentFrontier.add(cellKey(target.row, target.col));
       const exposedAt = target.exposedAt;
       const start = blockCenter(target);
       const side = Math.sign(end.x - start.x) || (order % 2 ? 1 : -1);
@@ -715,6 +726,10 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     if (!energy.started) {
       energy.started = true;
       energy.target.launchPending = false;
+      const owner = state.slots.find(cannon => cannon?.id === energy.owner);
+      if (owner?.activeSnapGroup?.has(energy.target.id)) {
+        owner.snapFrontier.add(cellKey(energy.target.row, energy.target.col));
+      }
       const pixelDisplay = pixelDisplays.get(energy.target.id);
       if (pixelDisplay) pixelDisplay.visible = false;
     }
