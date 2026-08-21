@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "prepare-levels": "python3 tools/build_level_catalog.py",
+    "dev": "pnpm prepare-levels && vite",
+    "build": "pnpm prepare-levels && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

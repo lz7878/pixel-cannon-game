@@ -34,35 +34,50 @@ pnpm preview
 
 ## 关卡结构
 
-每关都是一个独立目录，地图、取色结果和检查图不会再堆到项目根目录：
+关卡是静态 JSON 数据，不参与 Vite 的模块扫描。构建前会校验全部关卡并生成运行时清单；客户端先请求清单，进入某关时才请求该关 JSON。因此可以扩展到上千或上万关，而不会生成同等数量的 JS chunk。
 
 ```text
 levels/
-  index.js                 # 自动发现 level-编号 目录，并按需加载
-  level-001/index.js       # 地图 + 队列
-  level-002/
-    index.js               # 地图 + 队列
-    palette.json           # 从参考图采样出的专属调色板
-    art.txt                # 脚本生成的原始网格，便于审阅
-    preview.png            # 识别检查图
+  index.js                         # 运行时 JSON 加载器
+public/levels/
+  manifest.json                     # 自动生成：ID、分桶路径、地图尺寸
+  0000-0099/
+    level-0001.json                 # 地图、队列、可选专属调色板
+    level-0002.json
+  0100-0199/
+    level-0100.json
+tools/
+  build_level_catalog.py             # 校验 JSON 并生成 manifest
 ```
 
-`levels/index.js` 使用按需加载：进入某一关才下载该关地图。新增 `levels/level-003/index.js` 后会被自动发现，无需修改游戏主逻辑或关卡索引，适合持续扩展到大量关卡。
+新增关卡时按编号放进对应的 100 关分桶，例如 `level-0100.json` 放在 `public/levels/0100-0199/`。运行 `pnpm prepare-levels` 会检查地图是否矩形、颜色是否合法、队列弹药是否与地图色块数匹配，并更新 `manifest.json`。`pnpm dev` 和 `pnpm build` 都会自动执行该步骤。
+
+关卡 JSON 的格式如下：
+
+```json
+{
+  "id": "level-0100",
+  "art": ["..."],
+  "queue": [[{ "color": "R", "ammo": 12 }]],
+  "palette": {
+    "R": { "fill": "#ed2024", "light": "#ff4646", "dark": "#b81019" }
+  }
+}
+```
 
 ## 从参考图生成关卡
 
-先新建一个关卡目录和入口文件（可复制前一关的 `index.js`，只保留 `ART`、`QUEUE_ART` 与 `export default`），再运行：
+先复制一个相邻关卡 JSON，修改 `id` 和队列配置；再让识别脚本写入地图与专属调色板：
 
 ```bash
 python3 tools/image_to_art.py reference.png \
-  --preview levels/level-003/preview.png \
-  --output levels/level-003/art.txt \
-  --palette-output levels/level-003/palette.json \
-  --apply levels/level-003/index.js \
-  --variable ART
+  --preview /tmp/level-0100-preview.png \
+  --apply-json public/levels/0100-0199/level-0100.json
+
+pnpm prepare-levels
 ```
 
-确认 `preview.png` 的网格与积木中心对齐后即可运行游戏。图片周围有 UI 或留白时，用 `--crop left,top,right,bottom` 裁剪；仍有偏差时用 `--bounds left,top,right,bottom` 指定网格外框。
+确认检查图的网格与积木中心对齐后即可运行游戏。图片周围有 UI 或留白时，用 `--crop left,top,right,bottom` 裁剪；仍有偏差时用 `--bounds left,top,right,bottom` 指定网格外框。原始参考图和检查图建议放到仓库外的素材库或 Git LFS，不要随数万份运行时关卡数据一并打进 Web 构建产物。
 
 当前识别字符包括：`K` 黑、`R` 红、`W` 白、`G` 绿、`D` 深绿、`P/M` 两种粉、`C/B` 两种蓝、`Y` 黄、`O` 橙、`.` 空白。脚本会同时输出关卡的专属调色板，避免不同图片的相近颜色被游戏统一替换。
 

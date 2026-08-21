@@ -220,6 +220,18 @@ def apply_to_file(path: Path, art: list[str], variable: str) -> None:
     path.write_text(source[: match.start()] + replacement + source[match.end() :], encoding="utf-8")
 
 
+def apply_to_json_file(path: Path, art: list[str], palette: dict[str, dict[str, str]]) -> None:
+    try:
+        level = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} 不是有效 JSON：{exc}") from exc
+    if not isinstance(level, dict):
+        raise ValueError(f"{path} 的根节点必须是对象")
+    level["art"] = art
+    level["palette"] = palette
+    path.write_text(json.dumps(level, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def save_preview(
     image: Image.Image,
     path: Path,
@@ -245,7 +257,7 @@ def save_preview(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="从像素积木参考图生成 JavaScript ART 网格")
+    parser = argparse.ArgumentParser(description="从像素积木参考图生成关卡 ART 网格")
     parser.add_argument("image", type=Path, help="原始参考图路径")
     parser.add_argument("--cols", type=int, default=34, help="网格列数，默认 34")
     parser.add_argument("--rows", type=int, default=34, help="网格行数，默认 34")
@@ -255,6 +267,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="将 ART 写入文本文件；默认打印到终端")
     parser.add_argument("--palette-output", type=Path, help="输出从图片采样得到的 JSON 调色板")
     parser.add_argument("--apply", type=Path, help="直接替换指定 JS 文件中的 ART")
+    parser.add_argument("--apply-json", type=Path, help="直接更新指定关卡 JSON 的 art 和 palette")
     parser.add_argument("--variable", default="ART", help="JS 变量名，默认 ART")
     args = parser.parse_args()
 
@@ -277,6 +290,10 @@ def main() -> int:
     if args.apply:
         apply_to_file(args.apply, art, args.variable)
         print(f"已更新 {args.apply}", file=sys.stderr)
+    if args.apply_json:
+        palette = derive_palette(image, bounds, art)
+        apply_to_json_file(args.apply_json, art, palette)
+        print(f"已更新 {args.apply_json}", file=sys.stderr)
     if args.preview:
         save_preview(image, args.preview, bounds, art)
         print(f"检查图：{args.preview}", file=sys.stderr)

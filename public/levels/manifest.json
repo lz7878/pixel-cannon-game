@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "levels": [
+    {
+      "id": "level-0001",
+      "number": 1,
+      "path": "levels/0000-0099/level-0001.json",
+      "rows": 34,
+      "cols": 34
+    },
+    {
+      "id": "level-0002",
+      "number": 2,
+      "path": "levels/0000-0099/level-0002.json",
+      "rows": 34,
+      "cols": 34
+    }
+  ]
+}
