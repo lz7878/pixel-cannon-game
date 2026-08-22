@@ -46,17 +46,19 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     B: { fill: '#7965e8', light: '#a795ff', dark: '#4d3da8' },
     K: { fill: '#292a31', light: '#41434d', dark: '#16171c' }
   };
-  const MAX_ACTIVE_ABSORPTIONS = 30;
-  const BLOCKED_LAUNCH_DELAY = .2;
+  // 新暴露方块的保护等待时间（秒），确保路径刚打开时不会抢跑。
+  const BLOCKED_LAUNCH_DELAY = .08;
+  // 同一核心已锁定目标之间的最小起飞间隔（秒）。
+  const PLANNED_LAUNCH_GAP = .05;
 
   const state = {
     width: 0, height: 0, dpr: 1,
     blocks: [], slots: Array(6).fill(null), pendingSlots: new Set(), lanes: [],
-    projectiles: [], particles: [], stars: [],
+    projectiles: [], particles: [], stars: [], planQueue: [], planning: false,
     columnRevealAt: {},
     totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
     deadlockNotified: false, adLoading: false, unlockedSlots: 6,
-    muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0,
+    muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0, nextPlanOrder: 0,
     levelId: getLevelId(START_LEVEL), level: null, loadingLevel: false, loadRequest: 0, ready: false,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
@@ -95,6 +97,18 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       if (Math.abs(block.row - row) + Math.abs(block.col - col) === 1) return true;
     }
     return false;
+  }
+
+  function snapExpansionDepth(block, cannon) {
+    if (!cannon?.snapFrontierDepth?.size) return Infinity;
+    let depth = Infinity;
+    for (const key of cannon.snapFrontier) {
+      const [row, col] = key.split(',').map(Number);
+      if (Math.abs(block.row - row) + Math.abs(block.col - col) === 1) {
+        depth = Math.min(depth, (cannon.snapFrontierDepth.get(key) ?? 0) + 1);
+      }
+    }
+    return depth;
   }
 
   function makeSnapGroup(anchor, color) {
@@ -243,12 +257,15 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
 
   function resetLevel() {
     state.sessionId++;
+    state.nextPlanOrder = 0;
     state.blocks = makeBlocks();
     state.lanes = makeQueue(state.blocks);
     state.slots = Array(6).fill(null);
     state.pendingSlots.clear();
     state.projectiles = [];
     state.particles = [];
+    state.planQueue = [];
+    state.planning = false;
     state.columnRevealAt = {};
     state.totalBlocks = state.blocks.length;
     state.remaining = state.totalBlocks;
@@ -451,7 +468,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const canvasRect = canvas.getBoundingClientRect();
     const targetLeft = canvasRect.left + slotX(slotIndex) - 29;
     const targetTop = canvasRect.top + slotY() - 38;
-    const cannon = { ...state.lanes[laneIndex].shift(), laneIndex };
+    const cannon = { ...state.lanes[laneIndex].shift(), laneIndex, planOrder: ++state.nextPlanOrder };
     const sessionId = state.sessionId;
     state.pendingSlots.add(slotIndex);
     state.deadlockNotified = false;
@@ -485,9 +502,9 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       state.slots[slotIndex] = {
         ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0,
         retiring: false, activeSnapGroup: null, snapAnchorId: null,
-        snapCenterId: null, snapRadius: 0, snapFrontier: new Set()
+        snapCenterId: null, snapRadius: 0, snapFrontier: new Set(), snapFrontierDepth: new Map()
       };
-      launchAvailableTargets(state.slots[slotIndex], slotIndex);
+      enqueueCannonPlan(state.slots[slotIndex], slotIndex);
       tone(430, .08, 'sine', .035);
     });
   }
@@ -529,6 +546,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       cannon.activeSnapGroup = null;
       cannon.snapAnchorId = null;
       cannon.snapFrontier = new Set();
+      cannon.snapFrontierDepth = new Map();
     }
 
     if (cannon && !cannon.snapCenterId && candidates.length) {
@@ -539,6 +557,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       cannon.activeSnapGroup = makeSnapGroup(anchor, color);
       cannon.snapAnchorId = anchor.id;
       cannon.snapFrontier = new Set();
+      cannon.snapFrontierDepth = new Map();
     } else if (cannon && !cannon.activeSnapGroup && cannon.snapCenterId && candidates.length) {
       // 一个连通组清完后，从固定圆心继续扩大半径，命中最近的下一组。
       const center = state.blocks.find(block => block.id === cannon.snapCenterId);
@@ -549,10 +568,12 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       cannon.activeSnapGroup = makeSnapGroup(anchor, color);
       cannon.snapAnchorId = anchor.id;
       cannon.snapFrontier = new Set();
+      cannon.snapFrontierDepth = new Map();
     }
 
     let pool = candidates;
     let groupCandidates = [];
+    let isExpansionPool = false;
     if (cannon?.activeSnapGroup) {
       const center = state.blocks.find(block => block.id === cannon.snapCenterId);
       // 搜索圆和连通扩散都只能从当前真实可达的候选中取点。
@@ -565,9 +586,12 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       const insideRadius = groupCandidates.filter(item =>
         blockDistance(item.block, center) <= cannon.snapRadius + .01
       );
-      pool = insideRadius.length
-        ? insideRadius
-        : groupCandidates.filter(item => touchesSnapFrontier(item.block, cannon.snapFrontier));
+      const expansionCandidates = groupCandidates.filter(item =>
+        touchesSnapFrontier(item.block, cannon.snapFrontier)
+      );
+      // 只要已有四邻扩散路径，就先走扩散；圆心范围只在前沿断开后负责关联下一片区域。
+      isExpansionPool = expansionCandidates.length > 0;
+      pool = expansionCandidates.length ? expansionCandidates : insideRadius;
       pool.forEach(item => { item.distance = blockDistance(item.block, center); });
     }
     const groupHasPendingLaunch = cannon?.activeSnapGroup && state.blocks.some(block =>
@@ -580,27 +604,70 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       cannon.activeSnapGroup = null;
       cannon.snapAnchorId = null;
       cannon.snapFrontier = new Set();
+      cannon.snapFrontierDepth = new Map();
       return getTargets(color, slotIndex, limit, cannon);
     }
     return pool.sort((a, b) => {
-      return a.distance - b.distance || a.block.row - b.block.row || a.block.col - b.block.col;
+      // 前沿扩散按层推进：先清完当前四邻层，再进入下一层，避免沿单一路径跳走。
+      const aDepth = isExpansionPool ? snapExpansionDepth(a.block, cannon) : Infinity;
+      const bDepth = isExpansionPool ? snapExpansionDepth(b.block, cannon) : Infinity;
+      return aDepth - bDepth || a.distance - b.distance ||
+        a.block.row - b.block.row || a.block.col - b.block.col;
     }).slice(0, limit);
   }
 
   function getTarget(color, slotIndex, cannon = null) { return getTargets(color, slotIndex, 1, cannon)[0] || null; }
 
+  function enqueueCannonPlan(cannon, slotIndex) {
+    state.planQueue.push({ cannonId: cannon.id, slotIndex, planOrder: cannon.planOrder });
+    state.planQueue.sort((left, right) => left.planOrder - right.planOrder);
+    if (state.planning) return;
+
+    state.planning = true;
+    while (state.planQueue.length) {
+      const next = state.planQueue.shift();
+      const queuedCannon = state.slots[next.slotIndex];
+      if (queuedCannon?.id === next.cannonId) {
+        launchAvailableTargets(queuedCannon, next.slotIndex);
+      }
+    }
+    state.planning = false;
+  }
+
+  function lockAvailableTargets(cannon, slotIndex, limit) {
+    const locked = [];
+    // 其他核心尚未起飞的目标仍然占位；只预演当前核心自己的路径，避免
+    // 将跨核心的未来空格误判为当前可达。
+    while (locked.length < limit) {
+      const target = getTarget(cannon.color, slotIndex, cannon);
+      if (!target) break;
+      target.block.alive = false;
+      target.block.launchPending = false;
+      // 预演与原本“方块实际起飞后打开四邻扩散前沿”完全使用同一前沿规则。
+      const targetKey = cellKey(target.block.row, target.block.col);
+      const depth = snapExpansionDepth(target.block, cannon);
+      cannon.snapFrontier.add(targetKey);
+      cannon.snapFrontierDepth.set(targetKey, Number.isFinite(depth) ? depth : 0);
+      state.columnRevealAt[target.block.col] = 0;
+      locked.push(target);
+    }
+
+    locked.forEach(({ block }) => {
+      block.alive = true;
+      block.reserved = true;
+    });
+    return locked;
+  }
+
   function launchAvailableTargets(cannon, slotIndex) {
     const ownedShotCount = state.projectiles.filter(projectile => projectile.owner === cannon.id).length;
-    const availableAmmo = Math.max(0, Math.min(
-      cannon.ammo - ownedShotCount,
-      MAX_ACTIVE_ABSORPTIONS - state.projectiles.length
-    ));
+    const availableAmmo = Math.max(0, cannon.ammo - ownedShotCount);
     if (!availableAmmo) return;
 
-    // 一次只确定一格，让圆外的连通扩散保持清晰的逐格波纹。
-    let targets = getTargets(cannon.color, slotIndex, 1, cannon);
+    // 阵地之间独立并行；每个核心只等待自己序列中的前置路径点。
+    const targets = lockAvailableTargets(cannon, slotIndex, availableAmmo);
     if (!targets.length) return;
-    resonate(cannon, slotIndex, targets);
+    resonate(cannon, slotIndex, targets, PLANNED_LAUNCH_GAP);
   }
 
   function markAdjacentTargetsExposed(block) {
@@ -672,11 +739,12 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     if (state.running && state.remaining > 0 && !state.projectiles.length) checkDeadlock();
   }
 
-  function resonate(cannon, index, selections, launchGap = 0) {
+  function resonate(cannon, index, selections, launchGap = 0, initialDependency = null) {
     const end = { x: slotX(index), y: slotY() - 6 };
     cannon.cooldown = .07;
     cannon.flash = 1;
     cannon.recoil = 1;
+    let previousProjectile = initialDependency;
     selections.forEach((selection, order) => {
       const target = selection.block;
       const exposedAt = target.exposedAt;
@@ -696,14 +764,17 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       markAdjacentTargetsExposed(target);
       state.remaining--;
       state.columnRevealAt[target.col] = state.time + .035;
-      state.projectiles.push({
+      const projectile = {
         owner: cannon.id, color: cannon.color, start, end, control,
         x: start.x, y: start.y, t: 0,
-        delay: (state.time - (exposedAt ?? -Infinity) < .5 ? BLOCKED_LAUNCH_DELAY : 0) + order * launchGap,
+        delay: state.time - (exposedAt ?? -Infinity) < .5 ? BLOCKED_LAUNCH_DELAY : (previousProjectile ? launchGap : 0),
+        dependsOn: previousProjectile,
         started: false,
         duration,
         done: false, target
-      });
+      };
+      state.projectiles.push(projectile);
+      previousProjectile = projectile;
     });
     updateProgress();
     tone(455 + index * 12, .11, 'sine', .035);
@@ -719,6 +790,8 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
   }
 
   function advanceEnergy(energy, dt) {
+    // 规划时允许按未来空格推导路线；真正起飞时仍严格按路径顺序进行。
+    if (!energy.started && energy.dependsOn && !energy.dependsOn.started) return;
     if (energy.delay > 0) {
       energy.delay -= dt * state.speedMultiplier;
       if (energy.delay > 0) return;
@@ -728,7 +801,12 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       energy.target.launchPending = false;
       const owner = state.slots.find(cannon => cannon?.id === energy.owner);
       if (owner?.activeSnapGroup?.has(energy.target.id)) {
-        owner.snapFrontier.add(cellKey(energy.target.row, energy.target.col));
+        const targetKey = cellKey(energy.target.row, energy.target.col);
+        owner.snapFrontier.add(targetKey);
+        if (!owner.snapFrontierDepth.has(targetKey)) {
+          const depth = snapExpansionDepth(energy.target, owner);
+          owner.snapFrontierDepth.set(targetKey, Number.isFinite(depth) ? depth : 0);
+        }
       }
       const pixelDisplay = pixelDisplays.get(energy.target.id);
       if (pixelDisplay) pixelDisplay.visible = false;
