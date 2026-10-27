@@ -1,3 +1,10 @@
 node_modules/
 dist/
 .vite/
+
+# 项目本地数据（记忆、缓存），不随仓库同步
+.workbuddy/
+
+# 系统与编辑器杂项
+.DS_Store
+*.log
