@@ -2,17 +2,21 @@
 
 一个参考“排队接人”消除玩法、改造成彩色爆破机器人主题的手机竖屏原型。
 
+核心的选点、预约与消除判定已经整体移植自 `games/taxi-pick`（原包 LayaAir 迁移工程），
+关卡数据同样来自原包的 50 个剧情关，不再依赖手工描图。
+
 ## 玩法
 
-- 底部机器人队伍使用 4 列 × 2 排展示：第一排可选择，第二排半透明预览下一队。
+- 底部机器人队伍使用多列 × 2 排展示：第一排可选择，第二排半透明预览下一队。
 - 点击第一排后，同列第二排会向前补位，后续机器人队伍继续补到第二排。
-- 机器人会自动寻找从下方暴露出来的同色方块。
-- 机器人从外围搜索所有上下左右连通的空格，可从底部、侧面或内部缝隙绕行；只要色块邻接可达空格就能爆破。
-- 每次爆破产生的新空格会立即加入可行走区域，机器人不会穿过仍存在的色块。
-- 每个阵地同一时间只派出 1 个机器人，完成爆破后才派下一只。
-- 没有可攻击目标的队伍会等待并占住阵地，上阵顺序是解谜关键。
-- 默认开放 4 个阵地，可通过激励视频占位流程解锁第 5 个阵地。
-- 4 个阵地堵塞时可通过视频解锁位救场；5 个阵地全部堵塞后挑战失败。
+- 机器人入场后按原包规则寻找同色方块：只有在**外露空气**旁边的格子才算可达。
+- 选点走原包的 A* 路径搜索，从炮台所在列的下方绕开存活方块接近目标，路径越短越优先。
+- 首个目标确定后进入 peel 焦点：同一连通组会沿着已打开的缝隙逐格剥开，
+  外层没走掉之前，内层不会跨层起飞。
+- 一个阵地同一时间只派出一批（最多 4 个）目标，命中后才继续下一批。
+- 第 1、2 关四面都能进；第 3 关开始启用原包棋盘围墙，只能从下方以及
+  连续 2 格以上的边界缺口进入。
+- 所有阵地被占满且 3 秒内没有任何核心能出手，判定挑战失败。
 
 ## 运行
 
@@ -34,55 +38,74 @@ pnpm preview
 
 ## 关卡结构
 
-关卡是静态 JSON 数据，不参与 Vite 的模块扫描。构建前会校验全部关卡并生成运行时清单；客户端先请求清单，进入某关时才请求该关 JSON。因此可以扩展到上千或上万关，而不会生成同等数量的 JS chunk。
+关卡是静态 JSON 数据，不参与 Vite 的模块扫描。构建前会校验全部关卡并生成运行时清单；
+客户端先请求清单，进入某关时才请求该关 JSON。因此可以扩展到上千或上万关。
 
 ```text
 levels/
-  index.js                         # 运行时 JSON 加载器
+  index.js                         # 运行时 JSON 加载器与格式归一化
 public/levels/
   manifest.json                     # 自动生成：ID、分桶路径、地图尺寸
   0000-0099/
-    level-0001.json                 # 地图、队列、可选专属调色板
-    level-0002.json
-  0100-0199/
-    level-0100.json
+    level-0001.json                 # 原包第 1 关（34 × 34，628 格）
+    ...
+    level-0050.json                 # 原包第 50 关（52 × 38，1976 格）
 tools/
-  build_level_catalog.py             # 校验 JSON 并生成 manifest
+  import_original_levels.mjs        # 从 taxi-pick 导入原包关卡
+  build_level_catalog.py            # 校验关卡并生成 manifest
 ```
 
-新增关卡时按编号放进对应的 100 关分桶，例如 `level-0100.json` 放在 `public/levels/0100-0199/`。运行 `pnpm prepare-levels` 会检查地图是否矩形、颜色是否合法、队列弹药是否与地图色块数匹配，并更新 `manifest.json`。`pnpm dev` 和 `pnpm build` 都会自动执行该步骤。
-
-关卡 JSON 的格式如下：
+关卡 JSON（format 2）：
 
 ```json
 {
-  "id": "level-0100",
-  "art": ["..."],
-  "queue": [[{ "color": "R", "ammo": 12 }]],
+  "id": "level-0001",
+  "format": 2,
+  "source": { "game": "taxi-pick", "grade": 1, "resource": "level1", "packId": 99003 },
+  "rows": 34,
+  "cols": 34,
+  "speedScale": 1.5,
+  "board": { "wall": false, "minOpeningCells": 2 },
   "palette": {
-    "R": { "fill": "#ed2024", "light": "#ff4646", "dark": "#b81019" }
-  }
+    "7011": { "fill": "#f9352e", "light": "#fb7e79", "dark": "#a4231e" }
+  },
+  "cannons": [[{ "color": 7004, "ammo": 33 }, { "color": 7011, "ammo": 34 }]],
+  "cells": [[0, 0, 7011, 7008, ...]]
 }
 ```
 
-## 从参考图生成关卡
+- `cells`：行优先、观察者视角（第 0 行在最上方），`0` 表示空格，其余是原包色号。
+- `cannons`：外层是队列列，内层是该列从前往后的炮台；`ammo` 必须与地图上该色块数相等。
+- `board.wall`：原包第 3 关及以后启用棋盘围墙。
+- `speedScale`：原包 `boardMoveSpeedScale`，第 1 关 1.5、第 2 关 1.2、其余 1。
 
-先复制一个相邻关卡 JSON，修改 `id` 和队列配置；再让识别脚本写入地图与专属调色板：
+旧格式（`art` 字符画 + `queue`/`queueArt`）仍然能加载，会由 `levels/index.js`
+归一化成同一份运行时结构，方便继续手工做测试关卡。
+
+## 从原包同步关卡
 
 ```bash
-python3 tools/image_to_art.py reference.png \
-  --preview /tmp/level-0100-preview.png \
-  --apply-json public/levels/0100-0199/level-0100.json
-
-pnpm prepare-levels
+pnpm import-levels          # 读取 ../games/taxi-pick，重写 public/levels 下的 50 关
+pnpm prepare-levels         # 校验并生成 manifest
 ```
 
-确认检查图的网格与积木中心对齐后即可运行游戏。图片周围有 UI 或留白时，用 `--crop left,top,right,bottom` 裁剪；仍有偏差时用 `--bounds left,top,right,bottom` 指定网格外框。原始参考图和检查图建议放到仓库外的素材库或 Git LFS，不要随数万份运行时关卡数据一并打进 Web 构建产物。
-
-当前识别字符包括：`K` 黑、`R` 红、`W` 白、`G` 绿、`D` 深绿、`P/M` 两种粉、`C/B` 两种蓝、`Y` 黄、`O` 橙、`.` 空白。脚本会同时输出关卡的专属调色板，避免不同图片的相近颜色被游戏统一替换。
+色号配色来源：原包 `palette.source.ts`（7001–7049）+ `assets/original/home/mat/` 下的
+`Color_Editor_*.lmat` 材质底色。少数色号（7060/7061/7163/7167/7168/7172）在原包素材里没有
+留下底色，导入脚本会按色号派生一个稳定色相，保证同一关内不撞色。
 
 ## 机制文档
 
-- [吸附逻辑](docs/absorption-logic.md)：固定圆心的半径搜索、同色连通扩散与可达性约束。
+- [消除与选点核心](docs/absorption-logic.md)：外露空气、A* 路径、peel 焦点、预约与提交。
 
-当前版本是用于验证核心玩法的 Web 原型。视频按钮目前用 1.1 秒延时模拟完整播放回调；接入抖音小游戏时，在激励视频 `onClose({ isEnded: true })` 回调中调用 `unlockExtraSlot()`，并继续接入生命周期、存档与分享 API。
+## 对应实现
+
+| 职责 | 文件 |
+| --- | --- |
+| 原包棋盘状态机（选点/预约/peel/可达性） | `core/original-board-state.js` |
+| 关卡数据 ↔ 世界坐标棋盘、炮台波次 | `core/board-session.js` |
+| 队列、阵地、飞行与渲染 | `game.js` |
+| 关卡导入与校验 | `tools/import_original_levels.mjs`、`tools/build_level_catalog.py` |
+
+当前版本是用于验证核心玩法的 Web 原型。视频按钮目前用 1.1 秒延时模拟完整播放回调；
+接入抖音小游戏时，在激励视频 `onClose({ isEnded: true })` 回调中调用 `unlockExtraSlot()`，
+并继续接入生命周期、存档与分享 API。

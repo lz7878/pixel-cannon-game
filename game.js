@@ -1,6 +1,7 @@
 import { Application, Container, Sprite, Texture } from 'pixi.js';
 import { START_LEVEL } from './game.config.js';
 import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/index.js';
+import { BoardSession } from './core/board-session.js';
 
 (async () => {
   const canvas = document.querySelector('#gameCanvas');
@@ -47,15 +48,14 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     K: { fill: '#292a31', light: '#41434d', dark: '#16171c' }
   };
   const MAX_ACTIVE_ABSORPTIONS = 30;
-  const BLOCKED_LAUNCH_DELAY = .2;
 
   const state = {
     width: 0, height: 0, dpr: 1,
-    blocks: [], slots: Array(6).fill(null), pendingSlots: new Set(), lanes: [],
+    blocks: [], blockGrid: [], boardSession: null,
+    slots: Array(6).fill(null), pendingSlots: new Set(), lanes: [],
     projectiles: [], particles: [], stars: [],
-    columnRevealAt: {},
     totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
-    deadlockNotified: false, adLoading: false, unlockedSlots: 6,
+    deadlockNotified: false, stalledSince: 0, adLoading: false, unlockedSlots: 6,
     muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0,
     levelId: getLevelId(START_LEVEL), level: null, loadingLevel: false, loadRequest: 0, ready: false,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
@@ -66,111 +66,49 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
   let pixelRevealFrame = 0;
 
   function currentLevel() { return state.level; }
-  function currentArt() { return currentLevel().art; }
-  function paletteFor(color) { return currentLevel().palette?.[color] || PALETTE[color]; }
-  function currentPalette() { return { ...PALETTE, ...currentLevel().palette }; }
+  function paletteFor(color) { return currentLevel().palette?.[color] || PALETTE[color] || PALETTE.K; }
 
   function makeBlocks() {
+    const level = currentLevel();
     const blocks = [];
-    currentArt().forEach((row, r) => [...row].forEach((color, c) => {
-      if (color !== '.') blocks.push({ id: `${r}-${c}`, row: r, col: c, color, alive: true, reserved: false, pop: 0 });
+    const grid = Array.from({ length: level.rows }, () => Array(level.cols).fill(null));
+    level.cells.forEach((row, r) => row.forEach((color, c) => {
+      if (!color) return;
+      const block = { id: `${r}-${c}`, row: r, col: c, color, alive: true, pop: 0 };
+      blocks.push(block);
+      grid[r][c] = block;
     }));
-    return blocks;
+    return { blocks, grid };
   }
 
-  function areOrthogonallyAdjacent(a, b) {
-    return Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
+  // 选点、预约、peel 全部交给原包 BoardState（core/board-session.js）；
+  // 这里只负责把“阵地”换算成炮台开火所在的棋盘列。
+  function slotColumn(index) {
+    const level = currentLevel();
+    const { x, cellX } = state.grid;
+    if (!cellX) return Math.floor(level.cols / 2);
+    return Math.max(0, Math.min(level.cols - 1, Math.floor((slotX(index) - x) / cellX)));
   }
 
-  function blockDistance(a, b) {
-    const aCenter = blockCenter(a);
-    const bCenter = blockCenter(b);
-    return Math.hypot(aCenter.x - bCenter.x, aCenter.y - bCenter.y);
-  }
-
-  function touchesSnapFrontier(block, frontier) {
-    if (!frontier?.size) return false;
-    for (const key of frontier) {
-      const [row, col] = key.split(',').map(Number);
-      if (Math.abs(block.row - row) + Math.abs(block.col - col) === 1) return true;
+  function boardCannonFor(cannon) {
+    if (!cannon.board) {
+      cannon.board = state.boardSession.createCannon(cannon.color, cannon.ammo);
+      cannon.board.laneIndex = cannon.laneIndex;
     }
-    return false;
+    return cannon.board;
   }
 
-  function makeSnapGroup(anchor, color) {
-    const sameColorBlocks = state.blocks.filter(block =>
-      block.alive && !block.reserved && block.color === color
-    );
-    // 搜索圆只负责命中连通组；组内仍严格沿同色四邻接扩散，
-    // 因此可以越过当前搜索半径，但不会跨越空格或对角线。
-    const grouped = new Set([anchor.id]);
-    const queue = [anchor];
-    for (let head = 0; head < queue.length; head++) {
-      const current = queue[head];
-      sameColorBlocks.forEach(candidate => {
-        if (grouped.has(candidate.id) || !areOrthogonallyAdjacent(current, candidate)) return;
-        grouped.add(candidate.id);
-        queue.push(candidate);
-      });
-    }
-    return grouped;
-  }
+  // 一次波次最多预约几个目标：原包 BoardWalkerSystem 的默认分块大小。
+  const WAVE_SIZE = 4;
 
-  const GRID_DIRECTIONS = [
-    { row: -1, col: 0 }, { row: 1, col: 0 },
-    { row: 0, col: -1 }, { row: 0, col: 1 }
-  ];
-
-  function cellKey(row, col) { return `${row},${col}`; }
-
-  function findReachableTargets(blocks, startCol = Math.floor(currentArt()[0].length / 2)) {
-    const rows = currentArt().length;
-    const cols = currentArt()[0].length;
-    const alive = blocks.filter(block => block.alive);
-    // 已经预定、但尚未起飞的块仍然占位；不能提前穿过它吸里面一层。
-    const occupied = new Set(blocks
-      .filter(block => block.alive || block.launchPending)
-      .map(block => cellKey(block.row, block.col)));
-    const start = { row: rows, col: Math.max(-1, Math.min(cols, startCol)) };
-    const startKey = cellKey(start.row, start.col);
-    const queue = [start];
-    const visited = new Set([startKey]);
-    const parents = new Map();
-    const distances = new Map([[startKey, 0]]);
-
-    for (let head = 0; head < queue.length; head++) {
-      const cell = queue[head];
-      const currentKey = cellKey(cell.row, cell.col);
-      GRID_DIRECTIONS.forEach(direction => {
-        const next = { row: cell.row + direction.row, col: cell.col + direction.col };
-        if (next.row < -1 || next.row > rows || next.col < -1 || next.col > cols) return;
-        const nextKey = cellKey(next.row, next.col);
-        if (visited.has(nextKey) || occupied.has(nextKey)) return;
-        visited.add(nextKey);
-        parents.set(nextKey, currentKey);
-        distances.set(nextKey, (distances.get(currentKey) || 0) + 1);
-        queue.push(next);
-      });
-    }
-
-    return alive.filter(block => !block.reserved).flatMap(block => {
-      const approaches = GRID_DIRECTIONS
-        .map(direction => ({ row: block.row + direction.row, col: block.col + direction.col }))
-        .filter(cell => visited.has(cellKey(cell.row, cell.col)))
-        .sort((a, b) => distances.get(cellKey(a.row, a.col)) - distances.get(cellKey(b.row, b.col)));
-      if (!approaches.length) return [];
-
-      const route = [];
-      let routeKey = cellKey(approaches[0].row, approaches[0].col);
-      while (routeKey) {
-        const [row, col] = routeKey.split(',').map(Number);
-        route.push({ row, col });
-        if (routeKey === startKey) break;
-        routeKey = parents.get(routeKey);
-      }
-      route.reverse();
-      return [{ block, route, distance: route.length }];
-    });
+  /** 向原包棋盘要一批目标；返回的格子已经在棋盘上被腾空。 */
+  function reserveWave(cannon, slotIndex, count) {
+    const session = state.boardSession;
+    if (!session) return [];
+    const handle = boardCannonFor(cannon);
+    // bulletTotalNum 就是这颗核心剩余的弹药，原包在每发命中时递减。
+    handle.bulletTotalNum = Math.max(0, cannon.ammo);
+    return session.reserve(handle, slotColumn(slotIndex), count);
   }
 
   function makeQueue(blocks) {
@@ -178,41 +116,24 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       counts[block.color] = (counts[block.color] || 0) + 1;
       return counts;
     }, {});
-    const configuredQueue = currentLevel().queue;
-    if (configuredQueue) {
-      const provided = configuredQueue.flat().reduce((counts, cannon) => {
-        counts[cannon.color] = (counts[cannon.color] || 0) + cannon.ammo;
-        return counts;
-      }, {});
-      const colors = new Set([...Object.keys(totals), ...Object.keys(provided)]);
-      const invalid = [...colors].find(color => totals[color] !== provided[color]);
-      if (invalid) {
-        throw new Error(`关卡 ${state.levelId} 的 ${invalid} 色能量配置为 ${provided[invalid] || 0}，应为 ${totals[invalid] || 0}`);
-      }
-      return configuredQueue.map((lane, laneIndex) => lane.map((cannon, cannonIndex) => ({
-        ...cannon,
-        id: `cannon-${laneIndex}-${cannonIndex}`
-      })));
-    }
-
-    const queueArt = currentLevel().queueArt;
-    const occurrences = [...queueArt.join('')].reduce((counts, color) => {
-      if (color !== '.') counts[color] = (counts[color] || 0) + 1;
+    const configured = currentLevel().lanes || [];
+    const lanes = configured.length
+      ? configured
+      : Object.entries(totals).map(([color, ammo]) => [{ color, ammo }]);
+    const provided = lanes.flat().reduce((counts, cannon) => {
+      counts[cannon.color] = (counts[cannon.color] || 0) + cannon.ammo;
       return counts;
     }, {});
-    const used = {};
-    const lanes = Array.from({ length: Math.max(...queueArt.map(row => row.length)) }, () => []);
-
-    queueArt.forEach((row, rowIndex) => [...row].forEach((color, laneIndex) => {
-      if (color === '.') return;
-      const indexForColor = used[color] || 0;
-      const baseAmmo = Math.floor(totals[color] / occurrences[color]);
-      const extraAmmo = totals[color] % occurrences[color];
-      const ammo = baseAmmo + (indexForColor < extraAmmo ? 1 : 0);
-      used[color] = indexForColor + 1;
-      lanes[laneIndex].push({ color, ammo, id: `cannon-${rowIndex}-${laneIndex}` });
-    }));
-    return lanes;
+    const colors = new Set([...Object.keys(totals), ...Object.keys(provided)]);
+    const invalid = [...colors].find(color => totals[color] !== provided[color]);
+    if (invalid) {
+      throw new Error(`关卡 ${state.levelId} 的 ${invalid} 色能量配置为 ${provided[invalid] || 0}，应为 ${totals[invalid] || 0}`);
+    }
+    return lanes.map((lane, laneIndex) => lane.map((cannon, cannonIndex) => ({
+      color: cannon.color,
+      ammo: cannon.ammo,
+      id: `cannon-${laneIndex}-${cannonIndex}`
+    })));
   }
 
   async function init(levelId = state.levelId) {
@@ -243,13 +164,16 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
 
   function resetLevel() {
     state.sessionId++;
-    state.blocks = makeBlocks();
+    const { blocks, grid } = makeBlocks();
+    state.blocks = blocks;
+    state.blockGrid = grid;
+    // 每个关卡一份棋盘会话：外露空气、frontier、预约表都随关卡重置。
+    state.boardSession = new BoardSession(currentLevel(), grid);
     state.lanes = makeQueue(state.blocks);
     state.slots = Array(6).fill(null);
     state.pendingSlots.clear();
     state.projectiles = [];
     state.particles = [];
-    state.columnRevealAt = {};
     state.totalBlocks = state.blocks.length;
     state.remaining = state.totalBlocks;
     state.running = true;
@@ -294,16 +218,17 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
 
     const artHeightRatio = state.height < 500 ? .48 : .53;
     const pixelUnit = 1 / state.dpr;
+    const level = currentLevel();
     const rawCell = Math.min(
-      (state.width - 18) / currentArt()[0].length,
-      (state.height * artHeightRatio) / currentArt().length
+      (state.width - 18) / level.cols,
+      (state.height * artHeightRatio) / level.rows
     );
     const cell = Math.floor(rawCell / pixelUnit) * pixelUnit;
     const snapToPixel = value => Math.round(value / pixelUnit) * pixelUnit;
     state.grid = {
       cellX: cell,
       cellY: cell,
-      x: snapToPixel((state.width - currentArt()[0].length * cell) / 2),
+      x: snapToPixel((state.width - level.cols * cell) / 2),
       y: snapToPixel(Math.max(64, state.height * .13))
     };
     // 保留旧版激励视频入口的定位能力，当前关卡默认开放全部阵地。
@@ -320,8 +245,9 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     tileTextures.forEach(texture => texture.destroy(true));
     tileTextures.clear();
     const { x, y, cellX, cellY } = state.grid;
-    Object.entries(currentPalette()).forEach(([color, palette]) => {
-      tileTextures.set(color, createTileTexture(palette, cellX, cellY));
+    const colors = new Set(state.blocks.map(block => block.color));
+    colors.forEach(color => {
+      tileTextures.set(color, createTileTexture(paletteFor(color), cellX, cellY));
     });
     state.blocks.filter(block => block.alive || block.launchPending).forEach(block => {
       const px = x + block.col * cellX;
@@ -330,7 +256,6 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       display.position.set(px, py);
       display.width = cellX;
       display.height = cellY;
-      display.visible = !block.reserved;
       pixelLayer.addChild(display);
       pixelDisplays.set(block.id, display);
     });
@@ -483,9 +408,7 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       if (sessionId !== state.sessionId || !state.running) return;
       state.pendingSlots.delete(slotIndex);
       state.slots[slotIndex] = {
-        ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0,
-        retiring: false, activeSnapGroup: null, snapAnchorId: null,
-        snapCenterId: null, snapRadius: 0, snapFrontier: new Set()
+        ...cannon, initialAmmo: cannon.ammo, cooldown: .12, flash: 1, recoil: 0, retiring: false
       };
       launchAvailableTargets(state.slots[slotIndex], slotIndex);
       tone(430, .08, 'sine', .035);
@@ -503,113 +426,32 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       .sort((a, b) => a.distance - b.distance || a.index - b.index)[0]?.index ?? -1;
   }
 
-  function returnCannonToQueue(slotIndex, cannon) {
-    // 同色块还在、但当前路径已经被其他颜色封住时，不能让核心一直占着阵地。
-    // 把剩余能量原样放回所属队列的最前面；之后路径打开还能继续使用这颗核心。
-    const laneIndex = cannon.laneIndex;
-    if (!Number.isInteger(laneIndex) || !state.lanes[laneIndex]) return;
-    state.lanes[laneIndex].unshift({ id: cannon.id, color: cannon.color, ammo: cannon.ammo, laneIndex });
-    state.slots[slotIndex] = null;
-    state.deadlockNotified = false;
-    renderQueue();
-  }
-
-  function getTargets(color, slotIndex, limit = 1, cannon = null) {
-    const startCol = Math.max(0, Math.min(currentArt()[0].length - 1,
-      Math.floor((slotX(slotIndex) - state.grid.x) / state.grid.cellX)
-    ));
-    const candidates = findReachableTargets(state.blocks, startCol).filter(item =>
-      item.block.color === color && (state.columnRevealAt[item.block.col] || 0) <= state.time
-    );
-    const hasSnapTargets = cannon?.activeSnapGroup && state.blocks.some(block =>
-      cannon.activeSnapGroup.has(block.id) && (block.alive || block.launchPending)
-    );
-    // 当前连通组完全离开后，保留固定圆心和半径，继续向外找下一组。
-    if (cannon?.activeSnapGroup && !hasSnapTargets) {
-      cannon.activeSnapGroup = null;
-      cannon.snapAnchorId = null;
-      cannon.snapFrontier = new Set();
-    }
-
-    if (cannon && !cannon.snapCenterId && candidates.length) {
-      // 第一发保持原规则：按炮台出发的可达路径距离确定固定圆心。
-      const anchor = candidates.slice().sort((a, b) => a.distance - b.distance)[0].block;
-      cannon.snapCenterId = anchor.id;
-      cannon.snapRadius = 0;
-      cannon.activeSnapGroup = makeSnapGroup(anchor, color);
-      cannon.snapAnchorId = anchor.id;
-      cannon.snapFrontier = new Set();
-    } else if (cannon && !cannon.activeSnapGroup && cannon.snapCenterId && candidates.length) {
-      // 一个连通组清完后，从固定圆心继续扩大半径，命中最近的下一组。
-      const center = state.blocks.find(block => block.id === cannon.snapCenterId);
-      const anchor = candidates.slice().sort((a, b) =>
-        blockDistance(a.block, center) - blockDistance(b.block, center) || a.distance - b.distance
-      )[0].block;
-      cannon.snapRadius = Math.max(cannon.snapRadius, blockDistance(anchor, center));
-      cannon.activeSnapGroup = makeSnapGroup(anchor, color);
-      cannon.snapAnchorId = anchor.id;
-      cannon.snapFrontier = new Set();
-    }
-
-    let pool = candidates;
-    let groupCandidates = [];
-    if (cannon?.activeSnapGroup) {
-      const center = state.blocks.find(block => block.id === cannon.snapCenterId);
-      // 搜索圆和连通扩散都只能从当前真实可达的候选中取点。
-      // 连通组可以决定后续方向，但不能绕过外层阻挡直接吸走内部方块。
-      groupCandidates = candidates.filter(item =>
-        cannon.activeSnapGroup.has(item.block.id)
-      );
-      // 每一轮先清掉搜索圆内的同色块；圆内清空后，再从已离开的格子
-      // 沿四邻接关系向圆外扩散，直到当前连通组彻底断开。
-      const insideRadius = groupCandidates.filter(item =>
-        blockDistance(item.block, center) <= cannon.snapRadius + .01
-      );
-      pool = insideRadius.length
-        ? insideRadius
-        : groupCandidates.filter(item => touchesSnapFrontier(item.block, cannon.snapFrontier));
-      pool.forEach(item => { item.distance = blockDistance(item.block, center); });
-    }
-    const groupHasPendingLaunch = cannon?.activeSnapGroup && state.blocks.some(block =>
-      cannon.activeSnapGroup.has(block.id) && block.launchPending
-    );
-    // 当前组的像素都不可达、也没有正在起飞的像素能继续打开路径时，
-    // 不能让核心永久锁在旧组；保留圆心和半径，改找其他可达同色组。
-    if (cannon?.activeSnapGroup && !pool.length && !groupCandidates.length &&
-      !groupHasPendingLaunch && candidates.length) {
-      cannon.activeSnapGroup = null;
-      cannon.snapAnchorId = null;
-      cannon.snapFrontier = new Set();
-      return getTargets(color, slotIndex, limit, cannon);
-    }
-    return pool.sort((a, b) => {
-      return a.distance - b.distance || a.block.row - b.block.row || a.block.col - b.block.col;
-    }).slice(0, limit);
-  }
-
-  function getTarget(color, slotIndex, cannon = null) { return getTargets(color, slotIndex, 1, cannon)[0] || null; }
-
+  /**
+   * 一次波次：向原包棋盘要目标并立刻提交。
+   * 返回的每一条都已经把格子从棋盘上摘掉，直接进入起飞动画即可。
+   */
   function launchAvailableTargets(cannon, slotIndex) {
-    const ownedShotCount = state.projectiles.filter(projectile => projectile.owner === cannon.id).length;
+    if (!state.boardSession) return false;
+    const ownedShots = state.projectiles.filter(projectile => projectile.owner === cannon.id).length;
     const availableAmmo = Math.max(0, Math.min(
-      cannon.ammo - ownedShotCount,
+      cannon.ammo - ownedShots,
       MAX_ACTIVE_ABSORPTIONS - state.projectiles.length
     ));
-    if (!availableAmmo) return;
-
-    // 一次只确定一格，让圆外的连通扩散保持清晰的逐格波纹。
-    let targets = getTargets(cannon.color, slotIndex, 1, cannon);
-    if (!targets.length) return;
-    resonate(cannon, slotIndex, targets);
+    if (!availableAmmo) return false;
+    const reservations = reserveWave(cannon, slotIndex, Math.min(availableAmmo, WAVE_SIZE));
+    if (!reservations.length) return false;
+    resonate(cannon, slotIndex, reservations.map(reservation => ({ block: reservation.block })), .045);
+    return true;
   }
 
-  function markAdjacentTargetsExposed(block) {
-    state.blocks.forEach(candidate => {
-      if (!candidate.alive) return;
-      const isAdjacent = Math.abs(candidate.row - block.row) + Math.abs(candidate.col - block.col) === 1;
-      if (isAdjacent) candidate.exposedAt = state.time;
-    });
+  /** 这颗核心此刻还有没有可打的目标（含马上会被腾空的目标）。 */
+  function cannonHasTarget(cannon, slotIndex) {
+    if (!state.boardSession || cannon.ammo <= 0) return false;
+    const handle = boardCannonFor(cannon);
+    handle.bulletTotalNum = Math.max(0, cannon.ammo);
+    return state.boardSession.hasTarget(handle, slotColumn(slotIndex));
   }
+
 
   function slotX(index) {
     const slotWidth = 58;
@@ -654,7 +496,11 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
           return;
         }
 
-        if (cannon.cooldown <= 0) launchAvailableTargets(cannon, index);
+        if (cannon.cooldown <= 0) {
+          // 预约一次要跑 A* 与外露空气刷新；失败也占用一个节拍，避免每帧重算。
+          cannon.cooldown = .1;
+          launchAvailableTargets(cannon, index);
+        }
       });
     }
 
@@ -674,12 +520,11 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
 
   function resonate(cannon, index, selections, launchGap = 0) {
     const end = { x: slotX(index), y: slotY() - 6 };
-    cannon.cooldown = .07;
+    cannon.cooldown = .1;
     cannon.flash = 1;
     cannon.recoil = 1;
     selections.forEach((selection, order) => {
       const target = selection.block;
-      const exposedAt = target.exposedAt;
       const start = blockCenter(target);
       const side = Math.sign(end.x - start.x) || (order % 2 ? 1 : -1);
       const control = {
@@ -688,18 +533,15 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
       };
       const distance = Math.hypot(end.x - start.x, end.y - start.y);
       const duration = Math.max(.8, Math.min(1.8, distance / 220));
-      // 起飞即让路；用很短的起飞错峰维持视觉上的先后顺序。
+      // 棋盘上这一格早在预约提交时就被腾空；这里只负责视觉上的起飞。
       target.alive = false;
-      target.reserved = false;
       target.launchPending = true;
       target.pop = 1;
-      markAdjacentTargetsExposed(target);
       state.remaining--;
-      state.columnRevealAt[target.col] = state.time + .035;
       state.projectiles.push({
         owner: cannon.id, color: cannon.color, start, end, control,
         x: start.x, y: start.y, t: 0,
-        delay: (state.time - (exposedAt ?? -Infinity) < .5 ? BLOCKED_LAUNCH_DELAY : 0) + order * launchGap,
+        delay: order * launchGap,
         started: false,
         duration,
         done: false, target
@@ -726,10 +568,6 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     if (!energy.started) {
       energy.started = true;
       energy.target.launchPending = false;
-      const owner = state.slots.find(cannon => cannon?.id === energy.owner);
-      if (owner?.activeSnapGroup?.has(energy.target.id)) {
-        owner.snapFrontier.add(cellKey(energy.target.row, energy.target.col));
-      }
       const pixelDisplay = pixelDisplays.get(energy.target.id);
       if (pixelDisplay) pixelDisplay.visible = false;
     }
@@ -770,22 +608,23 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
   }
 
   function checkDeadlock() {
-    if (Object.values(state.columnRevealAt).some(readyAt => readyAt > state.time)) return;
     const occupied = state.slots.slice(0, state.unlockedSlots).filter(Boolean);
-    if (occupied.length < state.unlockedSlots) return;
-    const canShoot = occupied.some((cannon, i) => getTarget(cannon.color, state.slots.indexOf(cannon), cannon));
-    if (!canShoot) {
-      const stalledSlotIndex = state.slots.findIndex((cannon, index) =>
-        index < state.unlockedSlots && cannon && !getTarget(cannon.color, index, cannon)
-      );
-      if (stalledSlotIndex >= 0) {
-        returnCannonToQueue(stalledSlotIndex, state.slots[stalledSlotIndex]);
-        toast('路径暂时受阻，核心已返回队列');
-        tone(180, .08, 'triangle', .03);
-      } else {
-        finish(false);
-      }
+    if (occupied.length < state.unlockedSlots) {
+      state.stalledSince = 0;
       return;
+    }
+    const canShoot = occupied.some(cannon => cannonHasTarget(cannon, state.slots.indexOf(cannon)));
+    if (canShoot) {
+      state.stalledSince = 0;
+      return;
+    }
+    // 原包的失败条件：停车区满位、没有运输任务、持续 3 秒。
+    if (!state.stalledSince) {
+      state.stalledSince = state.time;
+      toast('所有阵地都被堵住了，3 秒后挑战失败');
+      tone(180, .1, 'triangle', .03);
+    } else if (state.time - state.stalledSince >= 3) {
+      finish(false);
     }
   }
 
@@ -858,45 +697,6 @@ import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/
     const radius = Math.min(r, w / 2, h / 2);
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, radius);
-  }
-
-  function drawBlocks() {
-    const { x, y, cellX, cellY } = state.grid;
-    const cell = Math.min(cellX, cellY);
-    state.blocks.filter(b => b.alive).forEach(block => {
-      const px = x + block.col * cellX;
-      const py = y + block.row * cellY;
-      // 参考图中的积木几乎紧贴，只留一条很细的接缝。
-      const gapX = Math.max(.3, cellX * .022);
-      const gapY = Math.max(.3, cellY * .022);
-      const palette = paletteFor(block.color);
-      const reservedPulse = block.reserved ? Math.sin(state.time * 18) * 1.2 : 0;
-      ctx.save();
-      ctx.translate(px + cellX / 2, py + cellY / 2);
-      ctx.scale(1 + reservedPulse / cell, 1 + reservedPulse / cell);
-      ctx.translate(-cellX / 2, -cellY / 2);
-
-      ctx.shadowColor = 'rgba(40,27,82,.2)';
-      ctx.shadowBlur = 2;
-      ctx.shadowOffsetY = 1.5;
-      ctx.fillStyle = palette.dark;
-      roundRect(gapX, gapY + 1, cellX - gapX * 2, cellY - gapY * 2, cell * .2);
-      ctx.fill();
-      ctx.shadowColor = 'transparent';
-
-      const grad = ctx.createLinearGradient(0, 0, cellX, cellY);
-      grad.addColorStop(0, palette.light);
-      grad.addColorStop(.35, palette.fill);
-      grad.addColorStop(1, palette.dark);
-      ctx.fillStyle = grad;
-      roundRect(gapX, gapY, cellX - gapX * 2, cellY - gapY * 2 - 1, cell * .2);
-      ctx.fill();
-
-      ctx.fillStyle = 'rgba(255,255,255,.35)';
-      roundRect(gapX + cellX * .13, gapY + cellY * .1, cellX * .42, cellY * .12, 4);
-      ctx.fill();
-      ctx.restore();
-    });
   }
 
   function drawSlots() {

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "import-levels": "node tools/import_original_levels.mjs",
     "prepare-levels": "python3 tools/build_level_catalog.py",
     "dev": "pnpm prepare-levels && vite",
     "build": "pnpm prepare-levels && vite build",

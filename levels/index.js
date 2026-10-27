@@ -69,8 +69,86 @@ export async function loadLevel(id) {
   const response = await fetch(`${import.meta.env.BASE_URL}${entry.path}`, { cache: 'no-cache' });
   if (!response.ok) throw new Error(`无法加载关卡 ${entry.id}：${response.status}`);
   const level = await response.json();
-  if (!Array.isArray(level.art) || (!Array.isArray(level.queueArt) && !Array.isArray(level.queue))) {
-    throw new Error(`关卡 ${entry.id} 必须包含 art，以及 queueArt 或 queue`);
+  return { ...normalizeLevel(level, entry), id: entry.id };
+}
+
+/**
+ * 把关卡归一化成同一份运行时结构：
+ *   rows / cols / cells[行][列] 色号或 null / palette[色号] / lanes[列][炮台] / board
+ *
+ * format 2（当前）：直接来自 taxi-pick 原包，cells 存色号数字。
+ * 旧格式：art 用字符画，queue 或 queueArt 描述队列，这里补齐成同一结构。
+ */
+export function normalizeLevel(level, entry = {}) {
+  if (Array.isArray(level.cells)) {
+    const rows = level.rows ?? level.cells.length;
+    const cols = level.cols ?? level.cells[0]?.length ?? 0;
+    const cells = level.cells.map(row => Array.from({ length: cols }, (_, col) => row[col] || null));
+    return {
+      ...level,
+      number: entry.number ?? level.number,
+      rows,
+      cols,
+      cells,
+      palette: level.palette || {},
+      lanes: (level.cannons || []).map(lane => lane.map(cannon => ({
+        color: cannon.color,
+        ammo: cannon.ammo
+      }))),
+      board: { wall: false, minOpeningCells: 2, ...(level.board || {}) }
+    };
   }
-  return { ...level, id: entry.id };
+
+  const art = level.art;
+  if (!Array.isArray(art) || !art.length) throw new Error(`关卡 ${entry.id || ''} 缺少 art 或 cells`);
+  const rows = art.length;
+  const cols = art[0].length;
+  const cells = art.map(row => [...row].map(color => (color === '.' ? null : color)));
+  const totals = countColors(cells);
+  return {
+    ...level,
+    number: entry.number ?? level.number,
+    rows,
+    cols,
+    cells,
+    palette: level.palette || {},
+    lanes: lanesFromLegacy(level, totals),
+    board: { wall: false, minOpeningCells: 2, ...(level.board || {}) }
+  };
+}
+
+function countColors(cells) {
+  const totals = new Map();
+  for (const row of cells) {
+    for (const color of row) {
+      if (color) totals.set(color, (totals.get(color) || 0) + 1);
+    }
+  }
+  return totals;
+}
+
+function lanesFromLegacy(level, totals) {
+  if (Array.isArray(level.queue)) {
+    return level.queue.map(lane => lane.map(cannon => ({ color: cannon.color, ammo: cannon.ammo })));
+  }
+  if (Array.isArray(level.queueArt)) {
+    // 旧格式用字符画描述队列，按该颜色出现次数把弹药均分到每一门炮。
+    const occurrences = [...level.queueArt.join('')].reduce((counts, color) => {
+      if (color !== '.') counts[color] = (counts[color] || 0) + 1;
+      return counts;
+    }, {});
+    const used = {};
+    const lanes = Array.from({ length: Math.max(...level.queueArt.map(row => row.length)) }, () => []);
+    level.queueArt.forEach((row, rowIndex) => [...row].forEach((color, laneIndex) => {
+      if (color === '.') return;
+      const indexForColor = used[color] || 0;
+      const total = totals.get(color) || 0;
+      const ammo = Math.floor(total / occurrences[color]) + (indexForColor < total % occurrences[color] ? 1 : 0);
+      used[color] = indexForColor + 1;
+      lanes[laneIndex].push({ color, ammo });
+    }));
+    return lanes;
+  }
+  // 兜底：每种颜色一门炮，弹药等于色块数。
+  return [...totals].map(([color, ammo]) => [{ color, ammo }]);
 }

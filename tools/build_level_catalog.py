@@ -22,6 +22,68 @@ def fail(message: str) -> None:
     raise ValueError(message)
 
 
+def validate_original_level(level: dict, path: Path) -> tuple[int, int]:
+    """校验从 taxi-pick 导入的原包关卡（cells + cannons）。"""
+    rows = level.get("rows")
+    cols = level.get("cols")
+    cells = level.get("cells")
+    if not isinstance(rows, int) or not isinstance(cols, int) or rows <= 0 or cols <= 0:
+        fail(f"{path}: rows/cols 必须是正整数")
+    if not isinstance(cells, list) or len(cells) != rows:
+        fail(f"{path}: cells 行数必须等于 rows")
+    counts: Counter[str] = Counter()
+    for index, row in enumerate(cells):
+        if not isinstance(row, list) or len(row) != cols:
+            fail(f"{path}: cells[{index}] 列数必须等于 cols")
+        for col, value in enumerate(row):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                fail(f"{path}: cells[{index}][{col}] 必须是非负整数色号")
+            if value:
+                counts[str(value)] += 1
+    if not counts:
+        fail(f"{path}: cells 至少需要一个色块")
+
+    palette = level.get("palette")
+    if not isinstance(palette, dict):
+        fail(f"{path}: palette 必须是对象")
+    missing = sorted(set(counts) - set(palette))
+    if missing:
+        fail(f"{path}: palette 缺少色号 {', '.join(missing)}")
+    for key, shade in palette.items():
+        if not isinstance(shade, dict) or not {"fill", "light", "dark"} <= set(shade):
+            fail(f"{path}: palette[{key}] 必须包含 fill/light/dark")
+
+    cannons = level.get("cannons")
+    if not isinstance(cannons, list) or not cannons:
+        fail(f"{path}: cannons 必须是非空二维数组")
+    supplied: Counter[str] = Counter()
+    for lane_index, lane in enumerate(cannons):
+        if not isinstance(lane, list) or not lane:
+            fail(f"{path}: cannons[{lane_index}] 必须是非空数组")
+        for cannon_index, cannon in enumerate(lane):
+            if not isinstance(cannon, dict):
+                fail(f"{path}: cannons[{lane_index}][{cannon_index}] 必须是对象")
+            color = cannon.get("color")
+            ammo = cannon.get("ammo")
+            if not isinstance(color, int) or isinstance(color, bool) or str(color) not in palette:
+                fail(f"{path}: cannons[{lane_index}][{cannon_index}] 色号 {color!r} 不在 palette 中")
+            if not isinstance(ammo, int) or isinstance(ammo, bool) or ammo <= 0:
+                fail(f"{path}: cannons[{lane_index}][{cannon_index}] ammo 必须是正整数")
+            supplied[str(color)] += ammo
+    if supplied != counts:
+        details = ", ".join(
+            f"{color}: 地图 {counts[color]} / 队列 {supplied[color]}"
+            for color in sorted(set(counts) | set(supplied))
+            if counts[color] != supplied[color]
+        )
+        fail(f"{path}: 队列弹药与地图色块数不一致（{details}）")
+
+    board = level.get("board")
+    if board is not None and not isinstance(board, dict):
+        fail(f"{path}: board 必须是对象")
+    return rows, cols
+
+
 def validate_queue(level: dict, colors: Counter[str], path: Path) -> None:
     queue = level.get("queue")
     queue_art = level.get("queueArt")
@@ -68,6 +130,16 @@ def validate_level(path: Path) -> dict:
     level_id = level.get("id")
     if level_id != path.stem or not LEVEL_ID_PATTERN.match(str(level_id)):
         fail(f"{path}: id 必须与文件名一致")
+
+    if isinstance(level.get("cells"), list):
+        rows, cols = validate_original_level(level, path)
+        return {
+            "id": level_id,
+            "number": int(matched.group(1)),
+            "path": path.relative_to(PROJECT_ROOT / "public").as_posix(),
+            "rows": rows,
+            "cols": cols,
+        }
 
     art = level.get("art")
     if not isinstance(art, list) or not art or not all(isinstance(row, str) for row in art):
