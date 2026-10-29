@@ -5,8 +5,10 @@
  * 客户端按需请求对应关卡，不会让 Vite 扫描或拆分成成千上万个 JS 模块。
  */
 const LEVELS_ROOT = `${import.meta.env.BASE_URL}levels/`;
-let catalogPromise = null;
-let catalog = null;
+const catalogs = new Map();
+const catalogPromises = new Map();
+
+function catalogFor(collection) { return catalogs.get(collection); }
 
 function levelIdFromNumber(value) {
   const number = Math.max(1, Number(value) || 1);
@@ -18,7 +20,8 @@ function numberFromId(id) {
   return match ? Number(match[1]) : 0;
 }
 
-function resolveEntry(value) {
+function resolveEntry(value, collection = 'new') {
+  const catalog = catalogFor(collection);
   if (!catalog) return null;
   const id = typeof value === 'string' && catalog.byId.has(value)
     ? value
@@ -26,9 +29,12 @@ function resolveEntry(value) {
   return catalog.byId.get(id) || null;
 }
 
-async function loadCatalog() {
+async function loadCatalog(collection = 'new') {
+  const catalog = catalogFor(collection);
   if (catalog) return catalog;
-  catalogPromise ||= fetch(`${LEVELS_ROOT}manifest.json`, { cache: 'no-cache' })
+  if (catalogPromises.has(collection)) return catalogPromises.get(collection);
+  const manifestPath = collection === 'original' ? 'manifest.json' : 'new/manifest.json';
+  const promise = fetch(`${LEVELS_ROOT}${manifestPath}`, { cache: 'no-cache' })
     .then(response => {
       if (!response.ok) throw new Error(`无法加载关卡清单：${response.status}`);
       return response.json();
@@ -38,33 +44,44 @@ async function loadCatalog() {
         throw new Error('关卡清单为空或格式错误');
       }
       const levels = manifest.levels.slice().sort((left, right) => left.number - right.number);
-      catalog = { levels, byId: new Map(levels.map(level => [level.id, level])) };
-      return catalog;
+      const loaded = { levels, byId: new Map(levels.map(level => [level.id, level])) };
+      catalogs.set(collection, loaded);
+      return loaded;
+    }).catch(error => {
+      catalogPromises.delete(collection);
+      throw error;
     });
-  return catalogPromise;
+  catalogPromises.set(collection, promise);
+  return promise;
 }
 
-export function getLevelId(value) {
-  const entry = resolveEntry(value);
+export function getLevelId(value, collection = 'new') {
+  const catalog = catalogFor(collection);
+  const entry = resolveEntry(value, collection);
   if (entry) return entry.id;
   if (catalog) return catalog.levels[0].id;
   if (typeof value === 'string' && /^level-\d+$/.test(value)) return value;
   return levelIdFromNumber(value);
 }
 
-export function getNextLevelId(id) {
+export function getNextLevelId(id, collection = 'new') {
+  const catalog = catalogFor(collection);
   if (!catalog) return null;
   const index = catalog.levels.findIndex(level => level.id === id);
   return catalog.levels[index + 1]?.id || null;
 }
 
-export function getLevelNumber(id) {
-  return resolveEntry(id)?.number || numberFromId(id);
+export function getLevelNumber(id, collection = 'new') {
+  return resolveEntry(id, collection)?.number || numberFromId(id);
 }
 
-export async function loadLevel(id) {
-  await loadCatalog();
-  const entry = resolveEntry(id);
+export async function getLevelCount(collection = 'new') {
+  return (await loadCatalog(collection)).levels.length;
+}
+
+export async function loadLevel(id, collection = 'new') {
+  await loadCatalog(collection);
+  const entry = resolveEntry(id, collection);
   if (!entry) throw new Error(`未知关卡：${id}`);
   const response = await fetch(`${import.meta.env.BASE_URL}${entry.path}`, { cache: 'no-cache' });
   if (!response.ok) throw new Error(`无法加载关卡 ${entry.id}：${response.status}`);

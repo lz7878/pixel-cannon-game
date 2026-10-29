@@ -13,6 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LEVELS_ROOT = PROJECT_ROOT / "public" / "levels"
 MANIFEST_PATH = LEVELS_ROOT / "manifest.json"
+NEW_MANIFEST_PATH = LEVELS_ROOT / "new" / "manifest.json"
 LEVEL_FILE_PATTERN = re.compile(r"^level-(\d+)\.json$")
 LEVEL_ID_PATTERN = re.compile(r"^level-(\d+)$")
 VALID_CELL_PATTERN = re.compile(r"^[.A-Z]+$")
@@ -169,7 +170,10 @@ def validate_level(path: Path) -> dict:
 
 
 def main() -> int:
-    paths = sorted(path for path in LEVELS_ROOT.rglob("level-*.json") if path.name != "manifest.json")
+    paths = sorted(
+        path for path in LEVELS_ROOT.rglob("level-*.json")
+        if (LEVELS_ROOT / "new") not in path.parents
+    )
     if not paths:
         print(f"未找到关卡：{LEVELS_ROOT}", file=sys.stderr)
         return 1
@@ -188,7 +192,23 @@ def main() -> int:
 
     manifest = {"version": 1, "levels": levels}
     MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"已校验 {len(levels)} 关，并生成 {MANIFEST_PATH.relative_to(PROJECT_ROOT)}")
+    new_paths = sorted((LEVELS_ROOT / "new").glob("level-*.json"))
+    if new_paths:
+        try:
+            new_levels = [validate_level(path) for path in new_paths]
+        except ValueError as error:
+            print(f"新版关卡校验失败：{error}", file=sys.stderr)
+            return 1
+        new_levels.sort(key=lambda level: level["number"])
+        new_numbers = [level["number"] for level in new_levels]
+        if new_numbers != list(range(1, len(new_numbers) + 1)):
+            print("新版关卡校验失败：编号必须从 1 连续递增", file=sys.stderr)
+            return 1
+        NEW_MANIFEST_PATH.write_text(
+            json.dumps({"version": 1, "levels": new_levels}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    print(f"已生成原版 {len(levels)} 关及新版 {len(new_levels) if new_paths else 0} 关的清单")
     return 0
 
 

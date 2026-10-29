@@ -85,6 +85,34 @@ button { font: inherit; touch-action: manipulation; }
 }
 .level-copy strong { display: block; font-size: 20px; letter-spacing: 1px; text-shadow: 0 2px 0 #262630; }
 
+.level-tools {
+  position: absolute;
+  z-index: 8;
+  top: max(57px, calc(env(safe-area-inset-top) + 45px));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  padding: 5px;
+  border-radius: 13px;
+  background: rgba(42, 42, 60, .8);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.level-tools select, .level-tools input, .level-tools button {
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+}
+.level-tools select { max-width: 90px; padding: 0 3px; background: #f1efff; color: #34304f; }
+.level-tools label { white-space: nowrap; }
+.level-tools input { width: 34px; padding: 0 2px; background: #fff; color: #34304f; text-align: center; }
+.level-tools button { padding: 0 8px; background: #d9ccff; color: #38304f; font-weight: 800; }
+
 .mission-card {
   display: none;
   position: absolute;
@@ -192,12 +220,13 @@ button { font: inherit; touch-action: manipulation; }
 
 .queue {
   --lane-count: 4;
+  --card-width: clamp(46px, calc((100vw - 68px) / 6), 58px);
   height: 100%;
   display: grid;
-  grid-template-columns: repeat(var(--lane-count), 58px);
+  grid-template-columns: repeat(var(--lane-count), var(--card-width));
   justify-content: center;
   align-content: start;
-  column-gap: clamp(5px, 2.5vw, 12px);
+  column-gap: clamp(3px, 1.5vw, 8px);
   margin-top: 0;
   padding: 0 4px;
   border-radius: 0;
@@ -244,6 +273,7 @@ button { font: inherit; touch-action: manipulation; }
   transition: transform .16s, opacity .16s;
   animation: queueIn .2s ease-out;
 }
+.queue .cannon-card { width: var(--card-width); }
 
 .cannon-card::before {
   content: "";
@@ -269,7 +299,8 @@ button { font: inherit; touch-action: manipulation; }
 .core-orb {
   position: absolute;
   top: 8px;
-  left: 11px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 32px;
   height: 32px;
   display: grid;
@@ -398,6 +429,8 @@ button { font: inherit; touch-action: manipulation; }
 .result-panel h1 { margin: 8px 0; font-size: 34px; }
 .result-panel p { margin: 0 0 22px; color: #ddd4f8; font-size: 13px; }
 .result-panel button { padding: 12px 28px; border: 0; border-radius: 16px; color: #4d369b; background: white; font-weight: 900; box-shadow: 0 6px 0 #cfc2ff; }
+.result-panel button[hidden] { display: none; }
+.result-panel #reviveButton { margin-bottom: 16px; color: #35275c; background: #ffda59; box-shadow: 0 6px 0 #c9a637; }
 
 @keyframes appear { from { opacity: 0; transform: scale(1.05); } }
 @keyframes bob { to { transform: translateY(-8px) rotate(8deg); } }

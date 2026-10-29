@@ -155,6 +155,31 @@ export class BoardSession {
     });
   }
 
+  /** 复活直消：按原包的同色局部优先规则预约，不要求外露路径。 */
+  reserveDirect(handle, visualCol, count) {
+    if (!handle || count <= 0 || handle.bulletTotalNum <= 0) return [];
+    handle.__boardWalkerPlanningPosition = this.firePosition(visualCol);
+    const centerCol = this.cols - 1 - Math.max(0, Math.min(this.cols - 1, visualCol));
+    const radius = Math.max(6, Math.ceil(.42 * this.cols));
+    const batchCols = [];
+    const batchRows = [];
+    const reservations = [];
+    for (let index = 0; index < count; index++) {
+      const reservation = this.board.tryReserveReviveDirectTarget(
+        handle, batchCols, batchRows, centerCol, radius
+      );
+      if (!reservation) break;
+      reservations.push(reservation);
+      batchCols.push(reservation.col);
+      batchRows.push(reservation.row);
+    }
+    return this.board.commitReservations(reservations.map(reservation => reservation.id))
+      .flatMap(reservation => {
+        const block = reservation.cube?.block;
+        return block ? [{ id: reservation.id, block }] : [];
+      });
+  }
+
   /** 这颗炮台此刻是否还有可以打的目标（含即将被腾空的目标）。 */
   hasTarget(handle, visualCol) {
     if (!handle || handle.bulletTotalNum <= 0) return false;

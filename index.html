@@ -16,6 +16,15 @@
           <button id="restartButton" class="round-button" aria-label="重新开始">↻</button>
         </header>
 
+        <div class="level-tools" aria-label="关卡测试工具">
+          <select id="levelSet" aria-label="关卡版本">
+            <option value="new">新版关卡</option>
+            <option value="original">旧版关卡</option>
+          </select>
+          <label>第 <input id="levelJump" type="number" min="1" max="10" value="1" inputmode="numeric" aria-label="关卡序号" /> 关</label>
+          <button id="levelGo" type="button">跳转</button>
+        </div>
+
         <div class="mission-card" aria-label="关卡进度">
           <span>✦ 爆破所有色块</span>
           <div class="progress-wrap">
@@ -46,6 +55,7 @@
           <small id="resultEyebrow">任务完成</small>
           <h1 id="resultTitle">共振完成！</h1>
           <p id="resultText">能量核心已经吸收了所有像素</p>
+          <button id="reviveButton" type="button" hidden>复活并消除</button>
           <button id="resultButton">再来一局</button>
         </div>
       </section>

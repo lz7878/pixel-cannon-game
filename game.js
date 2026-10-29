@@ -1,6 +1,6 @@
 import { Application, Container, Sprite, Texture } from 'pixi.js';
-import { START_LEVEL } from './game.config.js';
-import { getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/index.js';
+import { START_LEVEL, START_LEVEL_SET } from './game.config.js';
+import { getLevelCount, getLevelId, getLevelNumber, getNextLevelId, loadLevel } from './levels/index.js';
 import { BoardSession } from './core/board-session.js';
 
 (async () => {
@@ -29,10 +29,17 @@ import { BoardSession } from './core/board-session.js';
   const resultTitle = document.querySelector('#resultTitle');
   const resultText = document.querySelector('#resultText');
   const resultButton = document.querySelector('#resultButton');
+  const reviveButton = document.querySelector('#reviveButton');
   const restartButton = document.querySelector('#restartButton');
   const soundButton = document.querySelector('#soundButton');
   const speedButton = document.querySelector('#speedButton');
   const slotUnlockButton = document.querySelector('#slotUnlockButton');
+  const levelSetEl = document.querySelector('#levelSet');
+  const levelJumpEl = document.querySelector('#levelJump');
+  const levelGoEl = document.querySelector('#levelGo');
+  const savedLevelSet = localStorage.getItem('pixel-cannon-level-set');
+  const initialLevelSet = savedLevelSet === 'original' ? 'original' : START_LEVEL_SET;
+  levelSetEl.value = initialLevelSet;
 
   const PALETTE = {
     R: { fill: '#ed2024', light: '#ff4646', dark: '#b81019' },
@@ -48,6 +55,7 @@ import { BoardSession } from './core/board-session.js';
     K: { fill: '#292a31', light: '#41434d', dark: '#16171c' }
   };
   const MAX_ACTIVE_ABSORPTIONS = 30;
+  const MAX_REVIVES = 3;
 
   const state = {
     width: 0, height: 0, dpr: 1,
@@ -56,8 +64,10 @@ import { BoardSession } from './core/board-session.js';
     projectiles: [], particles: [], stars: [],
     totalBlocks: 0, remaining: 0, running: true, win: false, finishing: false,
     deadlockNotified: false, stalledSince: 0, adLoading: false, unlockedSlots: 6,
+    reviveCount: 0,
     muted: false, speedMultiplier: 1, time: 0, last: 0, sessionId: 0,
-    levelId: getLevelId(START_LEVEL), level: null, loadingLevel: false, loadRequest: 0, ready: false,
+    levelSet: initialLevelSet, levelId: getLevelId(START_LEVEL, initialLevelSet),
+    level: null, loadingLevel: false, loadRequest: 0, ready: false,
     grid: { x: 0, y: 0, cellX: 0, cellY: 0 }
   };
 
@@ -132,12 +142,15 @@ import { BoardSession } from './core/board-session.js';
     return lanes.map((lane, laneIndex) => lane.map((cannon, cannonIndex) => ({
       color: cannon.color,
       ammo: cannon.ammo,
+      laneIndex,
+      cannonIndex,
       id: `cannon-${laneIndex}-${cannonIndex}`
     })));
   }
 
   async function init(levelId = state.levelId) {
     const request = ++state.loadRequest;
+    const collection = state.levelSet;
     state.loadingLevel = true;
     state.running = false;
     state.ready = false;
@@ -149,13 +162,14 @@ import { BoardSession } from './core/board-session.js';
     canvas.style.visibility = 'hidden';
     resultPanel.hidden = true;
     try {
-      const level = await loadLevel(levelId);
+      const level = await loadLevel(levelId, collection);
       if (request !== state.loadRequest) return;
       state.levelId = level.id;
       state.level = level;
       state.loadingLevel = false;
       resetLevel();
     } catch (error) {
+      if (request !== state.loadRequest) return;
       state.loadingLevel = false;
       console.error(error);
       toast('关卡加载失败，请重试');
@@ -182,12 +196,16 @@ import { BoardSession } from './core/board-session.js';
     state.deadlockNotified = false;
     state.adLoading = false;
     state.unlockedSlots = 6;
+    state.reviveCount = 0;
     resultPanel.hidden = true;
+    reviveButton.hidden = true;
     slotUnlockButton.hidden = true;
     slotUnlockButton.classList.remove('loading');
     slotUnlockButton.querySelector('b').textContent = '解锁';
     slotUnlockButton.querySelector('small').textContent = '视频';
-    document.querySelector('.level-copy strong').textContent = `关卡${getLevelNumber(state.levelId)}`;
+    const levelNumber = getLevelNumber(state.levelId, state.levelSet);
+    document.querySelector('.level-copy strong').textContent = `关卡${levelNumber}`;
+    levelJumpEl.value = levelNumber;
     renderQueue();
     updateProgress();
     resize();
@@ -229,7 +247,7 @@ import { BoardSession } from './core/board-session.js';
       cellX: cell,
       cellY: cell,
       x: snapToPixel((state.width - level.cols * cell) / 2),
-      y: snapToPixel(Math.max(64, state.height * .13))
+      y: snapToPixel(Math.max(100, state.height * .13))
     };
     // 保留旧版激励视频入口的定位能力，当前关卡默认开放全部阵地。
     slotUnlockButton.style.left = `${slotX(5) - 29}px`;
@@ -518,7 +536,7 @@ import { BoardSession } from './core/board-session.js';
     if (state.running && state.remaining > 0 && !state.projectiles.length) checkDeadlock();
   }
 
-  function resonate(cannon, index, selections, launchGap = 0) {
+  function resonate(cannon, index, selections, launchGap = 0, direct = false) {
     const end = { x: slotX(index), y: slotY() - 6 };
     cannon.cooldown = .1;
     cannon.flash = 1;
@@ -532,7 +550,8 @@ import { BoardSession } from './core/board-session.js';
         y: Math.min(start.y, end.y) - 24 - (order % 4) * 5
       };
       const distance = Math.hypot(end.x - start.x, end.y - start.y);
-      const duration = Math.max(.8, Math.min(1.8, distance / 220));
+      const duration = direct ? Math.max(.23, Math.min(.45, distance / 650))
+        : Math.max(.8, Math.min(1.8, distance / 220));
       // 棋盘上这一格早在预约提交时就被腾空；这里只负责视觉上的起飞。
       target.alive = false;
       target.launchPending = true;
@@ -655,22 +674,55 @@ import { BoardSession } from './core/board-session.js';
     if (!state.running) return;
     state.running = false;
     state.win = win;
-    const nextLevelId = win && getNextLevelId(state.levelId);
+    const nextLevelId = win && getNextLevelId(state.levelId, state.levelSet);
     if (nextLevelId) {
+      const sessionId = state.sessionId;
+      const request = state.loadRequest;
+      const collection = state.levelSet;
       setTimeout(() => {
-        toast(`进入第${getLevelNumber(nextLevelId)}关`);
+        if (sessionId !== state.sessionId || request !== state.loadRequest || state.levelSet !== collection) return;
+        toast(`进入第${getLevelNumber(nextLevelId, state.levelSet)}关`);
         init(nextLevelId);
       }, 620);
       return;
     }
+    const sessionId = state.sessionId;
+    const request = state.loadRequest;
     setTimeout(() => {
+      if (sessionId !== state.sessionId || request !== state.loadRequest) return;
       resultEyebrow.textContent = win ? '任务完成' : '阵地堵塞';
-      resultTitle.textContent = win ? '共振完成！' : '换个顺序试试';
-      resultText.textContent = win ? '能量核心已经吸收了所有像素' : '所有能量核心都找不到同色目标，调整进入阵地的顺序再试一次';
+      const canRevive = !win && state.reviveCount < MAX_REVIVES;
+      resultTitle.textContent = win ? '共振完成！' : canRevive ? '六个阵地一起消除' : '换个顺序试试';
+      resultText.textContent = win ? '能量核心已经吸收了所有像素'
+        : canRevive ? '复活后，6 个核心会直接消除各自剩余弹药对应的色块，下方队列不变'
+          : '所有阵地都被堵住了，请重新挑战本关';
+      reviveButton.hidden = !canRevive;
+      reviveButton.textContent = `复活并消除（剩余 ${MAX_REVIVES - state.reviveCount} 次）`;
       resultButton.textContent = win ? '再来一局' : '重新挑战';
       resultPanel.hidden = false;
       tone(win ? 660 : 110, .25, win ? 'sine' : 'sawtooth', .055);
     }, 220);
+  }
+
+  function revive() {
+    if (state.running || state.win || state.reviveCount >= MAX_REVIVES || !state.level) return;
+    // 保留已入场的核心；各自直接吸收与剩余弹药等量的同色方块，耗尽后正常离场。
+    // 下方队列既不重排，也不接收阵地中的核心。
+    state.slots.forEach((cannon, slotIndex) => {
+      if (!cannon || cannon.ammo <= 0) return;
+      const handle = boardCannonFor(cannon);
+      handle.bulletTotalNum = cannon.ammo;
+      const targets = state.boardSession.reserveDirect(handle, slotColumn(slotIndex), cannon.ammo);
+      if (targets.length) resonate(cannon, slotIndex, targets.map(({ block }) => ({ block })), .008, true);
+    });
+    state.reviveCount++;
+    state.stalledSince = 0;
+    state.deadlockNotified = false;
+    state.running = true;
+    resultPanel.hidden = true;
+    reviveButton.hidden = true;
+    toast('复活成功，阵地核心正在直接消除');
+    tone(680, .18, 'sine', .045);
   }
 
   function updateProgress() {
@@ -839,8 +891,38 @@ import { BoardSession } from './core/board-session.js';
     requestAnimationFrame(loop);
   }
 
-  restartButton.addEventListener('click', init);
-  resultButton.addEventListener('click', init);
+  async function refreshLevelLimit() {
+    const collection = state.levelSet;
+    try {
+      const count = await getLevelCount(collection);
+      if (collection === state.levelSet) levelJumpEl.max = count;
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  levelSetEl.addEventListener('change', () => {
+    state.levelSet = levelSetEl.value;
+    localStorage.setItem('pixel-cannon-level-set', state.levelSet);
+    refreshLevelLimit();
+    init(getLevelId(1, state.levelSet));
+  });
+  function jumpToLevel() {
+    const max = Number(levelJumpEl.max) || 1;
+    const number = Number(levelJumpEl.value);
+    if (!Number.isInteger(number) || number < 1 || number > max) {
+      toast(`请输入 1–${max} 之间的关卡`);
+      return;
+    }
+    init(getLevelId(number, state.levelSet));
+  }
+  levelGoEl.addEventListener('click', jumpToLevel);
+  levelJumpEl.addEventListener('keydown', event => {
+    if (event.key === 'Enter') jumpToLevel();
+  });
+  restartButton.addEventListener('click', () => init());
+  resultButton.addEventListener('click', () => init());
+  reviveButton.addEventListener('click', revive);
   slotUnlockButton.addEventListener('click', requestAdUnlock);
   speedButton.addEventListener('click', () => {
     state.speedMultiplier = state.speedMultiplier === 1 ? 2 : 1;
@@ -857,6 +939,7 @@ import { BoardSession } from './core/board-session.js';
   window.addEventListener('resize', resize);
   document.addEventListener('visibilitychange', () => { state.last = performance.now(); });
 
+  refreshLevelLimit();
   init();
   requestAnimationFrame(loop);
 })();
