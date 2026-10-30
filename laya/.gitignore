@@ -1,0 +1,5 @@
+.DS_Store
+library/
+local/
+temp/
+bin/

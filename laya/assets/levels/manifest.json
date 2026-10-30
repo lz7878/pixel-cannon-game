@@ -1,0 +1,355 @@
+{
+  "version": 1,
+  "levels": [
+    {
+      "id": "level-0001",
+      "number": 1,
+      "path": "levels/0000-0099/level-0001.json",
+      "rows": 34,
+      "cols": 34
+    },
+    {
+      "id": "level-0002",
+      "number": 2,
+      "path": "levels/0000-0099/level-0002.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0003",
+      "number": 3,
+      "path": "levels/0000-0099/level-0003.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0004",
+      "number": 4,
+      "path": "levels/0000-0099/level-0004.json",
+      "rows": 50,
+      "cols": 40
+    },
+    {
+      "id": "level-0005",
+      "number": 5,
+      "path": "levels/0000-0099/level-0005.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0006",
+      "number": 6,
+      "path": "levels/0000-0099/level-0006.json",
+      "rows": 57,
+      "cols": 37
+    },
+    {
+      "id": "level-0007",
+      "number": 7,
+      "path": "levels/0000-0099/level-0007.json",
+      "rows": 41,
+      "cols": 41
+    },
+    {
+      "id": "level-0008",
+      "number": 8,
+      "path": "levels/0000-0099/level-0008.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0009",
+      "number": 9,
+      "path": "levels/0000-0099/level-0009.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0010",
+      "number": 10,
+      "path": "levels/0000-0099/level-0010.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0011",
+      "number": 11,
+      "path": "levels/0000-0099/level-0011.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0012",
+      "number": 12,
+      "path": "levels/0000-0099/level-0012.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0013",
+      "number": 13,
+      "path": "levels/0000-0099/level-0013.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0014",
+      "number": 14,
+      "path": "levels/0000-0099/level-0014.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0015",
+      "number": 15,
+      "path": "levels/0000-0099/level-0015.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0016",
+      "number": 16,
+      "path": "levels/0000-0099/level-0016.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0017",
+      "number": 17,
+      "path": "levels/0000-0099/level-0017.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0018",
+      "number": 18,
+      "path": "levels/0000-0099/level-0018.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0019",
+      "number": 19,
+      "path": "levels/0000-0099/level-0019.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0020",
+      "number": 20,
+      "path": "levels/0000-0099/level-0020.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0021",
+      "number": 21,
+      "path": "levels/0000-0099/level-0021.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0022",
+      "number": 22,
+      "path": "levels/0000-0099/level-0022.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0023",
+      "number": 23,
+      "path": "levels/0000-0099/level-0023.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0024",
+      "number": 24,
+      "path": "levels/0000-0099/level-0024.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0025",
+      "number": 25,
+      "path": "levels/0000-0099/level-0025.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0026",
+      "number": 26,
+      "path": "levels/0000-0099/level-0026.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0027",
+      "number": 27,
+      "path": "levels/0000-0099/level-0027.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0028",
+      "number": 28,
+      "path": "levels/0000-0099/level-0028.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0029",
+      "number": 29,
+      "path": "levels/0000-0099/level-0029.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0030",
+      "number": 30,
+      "path": "levels/0000-0099/level-0030.json",
+      "rows": 50,
+      "cols": 38
+    },
+    {
+      "id": "level-0031",
+      "number": 31,
+      "path": "levels/0000-0099/level-0031.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0032",
+      "number": 32,
+      "path": "levels/0000-0099/level-0032.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0033",
+      "number": 33,
+      "path": "levels/0000-0099/level-0033.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0034",
+      "number": 34,
+      "path": "levels/0000-0099/level-0034.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0035",
+      "number": 35,
+      "path": "levels/0000-0099/level-0035.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0036",
+      "number": 36,
+      "path": "levels/0000-0099/level-0036.json",
+      "rows": 37,
+      "cols": 42
+    },
+    {
+      "id": "level-0037",
+      "number": 37,
+      "path": "levels/0000-0099/level-0037.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0038",
+      "number": 38,
+      "path": "levels/0000-0099/level-0038.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0039",
+      "number": 39,
+      "path": "levels/0000-0099/level-0039.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0040",
+      "number": 40,
+      "path": "levels/0000-0099/level-0040.json",
+      "rows": 50,
+      "cols": 38
+    },
+    {
+      "id": "level-0041",
+      "number": 41,
+      "path": "levels/0000-0099/level-0041.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0042",
+      "number": 42,
+      "path": "levels/0000-0099/level-0042.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0043",
+      "number": 43,
+      "path": "levels/0000-0099/level-0043.json",
+      "rows": 51,
+      "cols": 37
+    },
+    {
+      "id": "level-0044",
+      "number": 44,
+      "path": "levels/0000-0099/level-0044.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0045",
+      "number": 45,
+      "path": "levels/0000-0099/level-0045.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0046",
+      "number": 46,
+      "path": "levels/0000-0099/level-0046.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0047",
+      "number": 47,
+      "path": "levels/0000-0099/level-0047.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0048",
+      "number": 48,
+      "path": "levels/0000-0099/level-0048.json",
+      "rows": 52,
+      "cols": 38
+    },
+    {
+      "id": "level-0049",
+      "number": 49,
+      "path": "levels/0000-0099/level-0049.json",
+      "rows": 48,
+      "cols": 38
+    },
+    {
+      "id": "level-0050",
+      "number": 50,
+      "path": "levels/0000-0099/level-0050.json",
+      "rows": 52,
+      "cols": 38
+    }
+  ]
+}

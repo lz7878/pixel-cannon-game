@@ -1,0 +1,13 @@
+{
+  "addons": {
+    "ui2": "ui2"
+  },
+  "modules": [
+    "laya.ani",
+    "laya.core",
+    "laya.ui"
+  ],
+  "options": {
+    "laya.ui": "ui2"
+  }
+}

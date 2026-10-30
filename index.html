@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#221b46" />
-    <title>像素共振 · Pixel Resonance</title>
+    <title>像素引力队 · Pixel Pullers</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="game-shell" aria-label="像素共振游戏">
+    <main class="game-shell" aria-label="像素引力队游戏">
       <section class="play-area">
         <header class="hud">
           <button id="soundButton" class="round-button" aria-label="切换音效">♪</button>
@@ -26,7 +26,7 @@
         </div>
 
         <div class="mission-card" aria-label="关卡进度">
-          <span>✦ 爆破所有色块</span>
+          <span>✦ 吸收所有色块</span>
           <div class="progress-wrap">
             <span id="blockCount">0</span>
             <div class="progress-track"><i id="progressBar"></i></div>
@@ -34,7 +34,7 @@
         </div>
 
         <canvas id="pixiCanvas" aria-hidden="true"></canvas>
-        <canvas id="gameCanvas" aria-label="像素共振区域"></canvas>
+        <canvas id="gameCanvas" aria-label="像素引力区域"></canvas>
         <div id="slotCores" class="slot-cores" aria-hidden="true"></div>
 
         <button id="speedButton" class="speed-button" aria-label="切换二倍速">
